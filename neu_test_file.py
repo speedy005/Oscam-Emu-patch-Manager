@@ -572,6 +572,82 @@ class S3InstallWorker(QThread):
             if temp_clone and os.path.exists(temp_clone):
                 shutil.rmtree(temp_clone, ignore_errors=True)
 
+
+from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtWidgets import QFileDialog, QMessageBox, QApplication
+import os, platform, shutil, subprocess, tempfile
+import os, shutil, platform, subprocess, tempfile, re
+from PyQt6.QtCore import QThread, pyqtSignal
+import os, shutil, platform, subprocess, tempfile, re
+
+class S4InstallWorker(QThread):
+    finished_signal = pyqtSignal(bool, str)
+
+    def __init__(self, base_target_dir):
+        super().__init__()
+        # Das ist der vom User gewählte Basis-Pfad (z.B. C:\opt oder /opt)
+        self.base_target_dir = os.path.normpath(base_target_dir)
+
+    def run(self):
+        temp_clone = None
+        proj_name = "SimpleBuild 4"
+        sub_folder = "simplebuild4"
+        repo_url = "https://git.streamboard.tv/common/simplebuild4.git"
+        
+        try:
+            # 1. Zielverzeichnis festlegen
+            final_destination = os.path.join(self.base_target_dir, sub_folder)
+
+            # 2. Temporärer Clone im Benutzer-TEMP
+            temp_clone = tempfile.mkdtemp(prefix="s4_clone_gen_")
+
+            # 3. Git Clone mit --depth 1
+            is_win = platform.system() == "Windows"
+            subprocess.check_call(
+                ["git", "clone", "--depth", "1", repo_url, temp_clone],
+                shell=is_win
+            )
+
+            # 4. FIX FÜR PERMISSION DENIED (Windows):
+            git_dir = os.path.join(temp_clone, ".git")
+            if os.path.exists(git_dir):
+                if is_win:
+                    subprocess.run(['attrib', '-R', os.path.join(git_dir, '*'), '/S', '/D'], 
+                                   shell=True, capture_output=True)
+                shutil.rmtree(git_dir, ignore_errors=True)
+
+            # 5. Ziel-Unterordner erstellen
+            os.makedirs(final_destination, exist_ok=True)
+
+            # 6. Inhalte aus dem Temp-Clone kopieren
+            for item in os.listdir(temp_clone):
+                s = os.path.join(temp_clone, item)
+                d = os.path.join(final_destination, item)
+                
+                if os.path.isdir(s):
+                    shutil.copytree(s, d, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(s, d)
+
+            # 7. Linux Rechte setzen
+            if platform.system() == "Linux":
+                try:
+                    subprocess.call(["chmod", "-R", "755", final_destination])
+                except:
+                    pass
+
+            self.finished_signal.emit(True, f"{proj_name} erfolgreich in '{sub_folder}' installiert!")
+
+        except Exception as e:
+            error_msg = str(e)
+            if "Permission denied" in error_msg or "[Errno 13]" in error_msg:
+                error_msg += "\n\nTipp: Starten Sie das Programm als Admin oder wählen Sie einen anderen Installationsort."
+            
+            self.finished_signal.emit(False, f"{proj_name} Fehler: {error_msg}")
+
+        finally:
+            if temp_clone and os.path.exists(temp_clone):
+                shutil.rmtree(temp_clone, ignore_errors=True)
 # ===================== VERSION HANDLING (Optimiert) =====================
 try:
     from packaging.version import Version, InvalidVersion
@@ -2005,6 +2081,12 @@ TEXTS = {
         "installed_version": "Installierte Version ist",
         "new_version_found": "Neue Version verfügbar",
         "oscam_emu_patch_upload": "OSCam EMU Patch hochladen",
+        # s4 install
+        "s4_install_button": "S4 Installieren",
+        "s4_tooltip": "Linksklick: Install/Update\nRechtsklick: Pfad manuell wählen",
+        "restarting_check": "System-Check wird neu gestartet...",
+        "s4_ok": "S3 OK",
+        "s4_install": "S4 Installieren",
         # s3 install
         "s3_install_button": "S3 Installieren",
         "s3_tooltip": "Linksklick: Install/Update\nRechtsklick: Pfad manuell wählen",
@@ -4864,6 +4946,42 @@ class PatchManagerGUI(QWidget):
         print("[AUTO-DETECT] NCam konnte nicht gefunden werden.")
         return False
 
+
+    # ========================== SimpleBuild 4 ==========================
+    import os
+    import platform
+    import shutil
+
+    def auto_detect_s4_path(self):
+        """Sucht den SimpleBuild 4 Pfad automatisch auf Linux & Windows."""
+        if hasattr(self, "hide_final_label"):
+            self.hide_final_label()
+
+        is_win = platform.system() == "Windows"
+        project = "simplebuild4"
+    
+        # Basis-Pfade definieren
+        if is_win:
+            base_candidates = ["C:\\opt", "D:\\opt", os.path.expanduser("~")]
+        else:
+            base_candidates = ["/opt", os.path.expanduser("~")]
+
+        search_paths = [os.path.join(b, project) for b in base_candidates]
+        search_paths.append(os.getcwd()) # Aktuelles Verzeichnis einbeziehen
+
+        # Suche nach der 's4' Datei (mit .exe unter Windows)
+        binary = "s4.exe" if is_win else "s4"
+    
+        for p in search_paths:
+            full_binary_path = os.path.normpath(os.path.join(p, binary))
+            if os.path.exists(full_binary_path):
+                self.S4_PATH = os.path.normpath(p)
+                print(f"[AUTO-DETECT] SimpleBuild 4 gefunden: {self.S4_PATH}")
+                return True
+            
+        print("[AUTO-DETECT] SimpleBuild 4 konnte nicht gefunden werden.")
+        return False
+    
     def auto_detect_s3_path(self):
         """Sucht S3 Installation automatisch auf Linux & Windows."""
         is_win = platform.system() == "Windows"
@@ -4886,7 +5004,39 @@ class PatchManagerGUI(QWidget):
                 return True
 
         return False
+    def auto_detect_s4_path(self):
+        """Sucht SimpleBuild 4 Installation automatisch auf Linux & Windows."""
+        is_win = platform.system() == "Windows"
+        binary = "s4.exe" if is_win else "s4"
 
+        # Standard-Installationsorte für SimpleBuild 4
+        if is_win:
+            candidates = [
+                "C:\\simplebuild4", 
+                "C:\\opt\\simplebuild4", 
+                os.path.join(os.path.expanduser("~"), "simplebuild4")
+            ]
+        else:
+            candidates = [
+                "/opt/simplebuild4", 
+                "/usr/local/bin", 
+                "/usr/bin", 
+                os.path.expanduser("~/simplebuild4")
+            ]
+
+        for c in candidates:
+            # 1. Pfad ist ein Ordner, der die Binary enthält
+            if os.path.isdir(c) and os.path.exists(os.path.join(c, binary)):
+                self.S4_PATH = os.path.normpath(c)
+                return True
+            # 2. Pfad ist direkt die Binary selbst
+            if os.path.isfile(c) and (c.endswith(binary)):
+                self.S4_PATH = os.path.normpath(os.path.dirname(c))
+                return True
+
+        return False
+    
+    
     def find_existing_path(possible_paths):
         """Prüft eine Liste von Pfaden und gibt den ersten existierenden zurück."""
         import os
@@ -5013,7 +5163,115 @@ class PatchManagerGUI(QWidget):
                 "NCam Installation" if is_de else "NCam Setup", 
                 message
             )
+    def select_s4_path_manually(self):
+        """Dialog zur manuellen Auswahl des SimpleBuild 4 Pfads."""
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        import os
 
+        lang = getattr(self, "LANG", "de").lower()
+        t = {
+            "de": {"hint": "SimpleBuild 4 Ordner wählen", "ok": "S4 Pfad gesetzt"},
+            "en": {"hint": "Select SimpleBuild 4 folder", "ok": "S4 path set"},
+        }.get(lang, {"hint": "Select SimpleBuild 4 folder", "ok": "S4 path set"})
+
+        start_path = getattr(self, "S4_PATH", "/opt/simplebuild4")
+        chosen_dir = QFileDialog.getExistingDirectory(self, t["hint"], start_path)
+
+        if chosen_dir and os.path.exists(os.path.join(chosen_dir, "s4")):
+            self.S4_PATH = chosen_dir
+            save_config({"s4_custom_path": self.S4_PATH}, gui_instance=self)
+            self.update_ui_texts()
+            QMessageBox.information(self, "OK", f"{t['ok']}:\n{chosen_dir}")
+        else:
+            QMessageBox.warning(self, "Error", "Datei 's4' nicht im Ordner gefunden!")
+
+    def start_s4_install(self):
+        """Startet die SimpleBuild 4 Installation."""
+        from PyQt6.QtWidgets import QFileDialog
+        import platform
+        import os
+        if hasattr(self, "hide_final_label"):
+            self.hide_final_label()
+
+        is_de = getattr(self, "LANG", "de") == "de"
+        # Windows-tauglicher Startpfad für den Dialog
+        default_start = "C:\\" if platform.system() == "Windows" else "/opt"
+        start_path = getattr(self, "S4_PATH", default_start)
+
+        chosen_dir = QFileDialog.getExistingDirectory(
+            self, 
+            "Installationsordner wählen" if is_de else "Select Installation Folder",
+            start_path
+        )
+
+        if not chosen_dir:
+            return 
+
+        # Pfad säubern (Wichtig für Windows!)
+        self.S4_PATH = os.path.normpath(chosen_dir)
+    
+        try:
+            os.makedirs(self.S4_PATH, exist_ok=True)
+            self.btn_s4.setEnabled(False)
+            self.btn_s4.setText("⏳ ..." if is_de else "⏳ Busy...")
+
+            # Worker starten (Nutzt jetzt den S4InstallWorker)
+            self.s4_worker = S4InstallWorker(self.S4_PATH)
+            self.s4_worker.finished_signal.connect(self.on_s4_finished)
+            self.s4_worker.start()
+        except Exception as e:
+            self.on_s4_finished(False, f"Fehler beim Erstellen des Ordners: {str(e)}")
+
+    def on_s4_finished(self, success, message):
+        """Nach Abschluss des Workers für SimpleBuild 4."""
+        import os
+        from PyQt6.QtWidgets import QMessageBox
+
+        is_de = getattr(self, "LANG", "de") == "de"
+        self.btn_s4.setEnabled(True)
+
+        if success:
+            # 1. Pfad-Logik: Der Worker hat den spezifischen Unterordner erstellt
+            sub_folder = "simplebuild4"
+            
+            # Wir prüfen, ob der aktuelle S4_PATH den Unterordner bereits enthält
+            current_base = getattr(self, "S4_PATH", "")
+            if not current_base.lower().endswith(sub_folder.lower()):
+                new_path = os.path.normpath(os.path.join(current_base, sub_folder))
+            else:
+                new_path = os.path.normpath(current_base)
+
+            # 2. Instanz-Variable und Config permanent aktualisieren
+            self.S4_PATH = new_path
+            # Speichert den Pfad in der json, damit er beim nächsten Start direkt da ist
+            save_config({"s4_custom_path": self.S4_PATH}, gui_instance=self)
+
+            # 3. Visuelles Feedback
+            self.btn_s4.setStyleSheet(
+                "background-color: green; color: white; font-weight: bold; border-radius: 5px;"
+            )
+            self.btn_s4.setText("✅ Fertig" if is_de else "✅ Done")
+            
+            # UI-Texte (Labels etc.) aktualisieren, falls die Funktion existiert
+            if hasattr(self, "update_ui_texts"):
+                self.update_ui_texts()
+
+            QMessageBox.information(
+                self, 
+                "SimpleBuild 4 Installation" if is_de else "SimpleBuild 4 Setup", 
+                f"{message}\n\nPfad: {self.S4_PATH}" if is_de else f"{message}\n\nPath: {self.S4_PATH}"
+            )
+        else:
+            # Fehler-Zustand
+            self.btn_s4.setStyleSheet(
+                "background-color: #e74c3c; color: white; font-weight: bold; border-radius: 5px;"
+            )
+            self.btn_s4.setText("❌ Fehler" if is_de else "❌ Error")
+            QMessageBox.critical(
+                self, 
+                "SimpleBuild 4 Installation" if is_de else "SimpleBuild 4 Setup", 
+                message
+            )
     # ========================== S3 ==========================
     
 
@@ -11321,7 +11579,7 @@ class PatchManagerGUI(QWidget):
         btn_v_sub_layout.setSpacing(5)  # Abstand zwischen S3 und NCam Button
         btn_v_sub_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Der S3 Button
+        # --- Der S3 Button ---
         self.btn_s3 = QPushButton("🚀 Install S3")
         self.btn_s3.setFixedSize(160, self.UI_BUTTON_H)
         self.btn_s3.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -11333,12 +11591,27 @@ class PatchManagerGUI(QWidget):
                 border: 1px solid #555; border-radius: 8px; 
             }
             QPushButton:hover { background-color: orange; color: black; }
-        """
+            """
         )
 
-        # Der NCam-Button
+        # --- Der neue SimpleBuild 4 (S4) Button ---
+        self.btn_s4 = QPushButton("🚀 Install S4")
+        self.btn_s4.setFixedSize(180, self.UI_BUTTON_H)
+        self.btn_s4.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_s4.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self.btn_s4.setStyleSheet(
+            """
+            QPushButton { 
+                color: #2ecc71; background-color: #3d3d3d; 
+                border: 1px solid #555; border-radius: 8px; 
+            }
+            QPushButton:hover { background-color: #2ecc71; color: black; }
+            """
+        )
+
+        # --- Der NCam-Button ---
         self.btn_ncam = QPushButton("🚀 Install NCam-speedy")
-        self.btn_ncam.setFixedSize(160, self.UI_BUTTON_H)
+        self.btn_ncam.setFixedSize(180, self.UI_BUTTON_H)
         self.btn_ncam.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_ncam.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self.btn_ncam.setStyleSheet(
@@ -11348,21 +11621,32 @@ class PatchManagerGUI(QWidget):
                 border: 1px solid #555; border-radius: 8px; 
             }
             QPushButton:hover { background-color: orange; color: black; }
-        """
+            """
         )
 
-        # Buttons zum vertikalen Layout hinzufügen
-        btn_v_sub_layout.addWidget(self.btn_s3)
+        # Horizontales Layout: S3 und S4 nebeneinander setzen
+        s3_s4_h_layout = QHBoxLayout()
+        s3_s4_h_layout.addWidget(self.btn_s3)
+        s3_s4_h_layout.addWidget(self.btn_s4)
+
+        # Zum vertikalen Layout hinzufügen: Erst die S3/S4-Reihe, dann NCam darunter
+        btn_v_sub_layout.addLayout(s3_s4_h_layout)
         btn_v_sub_layout.addWidget(self.btn_ncam)
 
         # Das vertikale Button-Paket in das horizontale Hauptlayout einfügen
         date_s3_h_layout.addLayout(btn_v_sub_layout)
 
-        # --- Signale & Kontextmenüs ---
+        # --- Signale & Kontextmenüs für S3 ---
         self.btn_s3.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.btn_s3.customContextMenuRequested.connect(self.select_s3_path_manually)
         self.btn_s3.clicked.connect(self.start_s3_install)
 
+        # --- Signale & Kontextmenüs für S4 ---
+        self.btn_s4.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.btn_s4.customContextMenuRequested.connect(self.select_s4_path_manually)
+        self.btn_s4.clicked.connect(self.start_s4_install)
+
+        # --- Signale & Kontextmenüs für NCam ---
         self.btn_ncam.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.btn_ncam.customContextMenuRequested.connect(self.select_ncam_path_manually)
         self.btn_ncam.clicked.connect(self.start_ncam_install)
