@@ -2081,19 +2081,13 @@ TEXTS = {
         "installed_version": "Installierte Version ist",
         "new_version_found": "Neue Version verfügbar",
         "oscam_emu_patch_upload": "OSCam EMU Patch hochladen",
-        # SimpleBuild 4 Installer
-        "s4_btn_install = 🚀 Installiere SimpleBuild 4"
-        "s4_btn_busy = ⏳ Installiert..."
-        "s4_btn_done = ✅ Fertig"
-         "s4_btn_error = ❌ Fehler"
-
-"s4_hint_select = SimpleBuild 4 Ordner wählen"
-"s4_path_set = SimpleBuild 4 Pfad erfolgreich gesetzt"
-"s4_folder_error = Die Datei 's4' wurde in diesem Ordner nicht gefunden!"
-"s4_create_dir_error = Fehler beim Erstellen des Ordners:"
-
-"s4_dialog_title = SimpleBuild 4 Installation"
-"s4_dialog_success = SimpleBuild 4 erfolgreich installiert!"
+        # s4 install
+        "s4_install": "S4 Installieren",
+        "s4_install_button": "S4 Installieren",
+        "s4_tooltip": "Linksklick: Install/Update\nRechtsklick: Pfad manuell wählen",
+        "restarting_check": "System-Check wird neu gestartet...",
+        "s4_ok": "S4 OK",
+        "s4_install": "S4 Installieren",
         # s3 install
         "s3_install_button": "S3 Installieren",
         "s3_tooltip": "Linksklick: Install/Update\nRechtsklick: Pfad manuell wählen",
@@ -5177,8 +5171,8 @@ class PatchManagerGUI(QWidget):
 
         lang = getattr(self, "LANG", "de").lower()
         t = {
-            "de": {"hint": "SimpleBuild 4 Ordner wählen", "ok": "S4 Pfad gesetzt"},
-            "en": {"hint": "Select SimpleBuild 4 folder", "ok": "S4 path set"},
+            "de": {"hint": "S4 Ordner wählen", "ok": "S4 Pfad gesetzt"},
+            "en": {"hint": "Select S4 folder", "ok": "S4 path set"},
         }.get(lang, {"hint": "Select SimpleBuild 4 folder", "ok": "S4 path set"})
 
         start_path = getattr(self, "S4_PATH", "/opt/simplebuild4")
@@ -5265,7 +5259,7 @@ class PatchManagerGUI(QWidget):
 
             QMessageBox.information(
                 self, 
-                "SimpleBuild 4 Installation" if is_de else "SimpleBuild 4 Setup", 
+                "S4 Installation" if is_de else "S4 Setup", 
                 f"{message}\n\nPfad: {self.S4_PATH}" if is_de else f"{message}\n\nPath: {self.S4_PATH}"
             )
         else:
@@ -11618,7 +11612,7 @@ class PatchManagerGUI(QWidget):
 
         # --- Der NCam-Button ---
         self.btn_ncam = QPushButton("🚀 Install NCam-speedy")
-        self.btn_ncam.setFixedSize(240, self.UI_BUTTON_H)
+        self.btn_ncam.setFixedSize(180, self.UI_BUTTON_H)
         self.btn_ncam.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_ncam.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self.btn_ncam.setStyleSheet(
@@ -13566,33 +13560,53 @@ class PatchManagerGUI(QWidget):
             self.update_language()
 
         # Buttons aktualisieren
-        for btn_attr, default_label in [("btn_s3", "S3"), ("btn_ncam", "NCam")]:
+        for btn_attr, default_label in [("btn_s3", "S3"), ("btn_s4", "S4"), ("btn_ncam", "NCam")]:
             btn = getattr(self, btn_attr, None)
             if not btn:
                 continue
-            exe = (
-                "s3.exe"
-                if btn_attr == "btn_s3" and platform.system() == "Windows"
-                else "s3"
-            )
-            if btn_attr == "btn_ncam":
+            
+            # 1. Bestimmung der ausführbaren Datei (Binary)
+            if btn_attr == "btn_s3":
+                exe = "s3.exe" if platform.system() == "Windows" else "s3"
+            elif btn_attr == "btn_s4":
+                exe = "s4.exe" if platform.system() == "Windows" else "s4"
+            else:  # btn_ncam
                 exe = "ncam.exe" if platform.system() == "Windows" else "ncam"
 
-            path_attr = "S3_PATH" if btn_attr == "btn_s3" else "NCAM_PATH"
-            default_path = "/opt/s3" if btn_attr == "btn_s3" else "/opt/ncam"
+            # 2. Zuordnung der Pfad-Variablen
+            if btn_attr == "btn_s3":
+                path_attr = "S3_PATH"
+                default_path = "/opt/s3"
+            elif btn_attr == "btn_s4":
+                path_attr = "S4_PATH"
+                default_path = "/opt/simplebuild4"
+            else:  # btn_ncam
+                path_attr = "NCAM_PATH"
+                default_path = "/opt/ncam"
+
+            # 3. Überprüfung auf Existenz
             path = getattr(self, path_attr, default_path)
             exists = os.path.exists(os.path.join(path, exe))
 
+            # --- OPTIMIERUNG: Schönere Anzeigenamen für die Buttons ---
+            display_name = "S4" if default_label == "S4" else default_label
+
             label = (
-                f"{default_label} OK"
+                f"{display_name} OK"
                 if exists
                 else (
-                    f"{default_label} Installieren"
+                    f"{display_name} Installieren"
                     if is_de
-                    else f"Install {default_label}"
+                    else f"Install {display_name}"
                 )
             )
-            color = "#00FF00" if exists else "orange"
+            # ----------------------------------------------------------
+            
+            # Für S4 nutzen wir das schicke Grün (#2ecc71) anstelle von Orange, wenn es fehlt
+            if exists:
+                color = "#00FF00"
+            else:
+                color = "#2ecc71" if btn_attr == "btn_s4" else "orange"
 
             btn.setText(f"🚀 {label}")
             btn.setStyleSheet(
