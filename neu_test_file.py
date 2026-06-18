@@ -13,7 +13,6 @@ os.environ["QT_OPENGL"] = (
 os.environ["QT_QPA_PLATFORM"] = "windows"
 os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
 #!/usr/bin/env python3
-#!/usr/bin/env python3
 # =====================================================================
 #  OSCam Emu Patch Generator
 #
@@ -618,7 +617,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "4.4.0"
+APP_VERSION = "5.0.0"
 
 
 # ===================== PATCH DIRS =====================
@@ -4062,20 +4061,29 @@ QProgressBar { border: 1px solid #00FF41; background-color: #001100; text-align:
 QProgressBar::chunk { background-color: #00FF41; }
 """
 
+import sys
+import random
+import platform
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QEasingCurve, QPropertyAnimation, QParallelAnimationGroup, QRect, pyqtProperty
+from PyQt6.QtGui import QFont, QPainter, QColor, QPen, QBrush, QScreen
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QGridLayout, QLabel, QProgressBar, QHBoxLayout, QApplication, QMainWindow
+
+# --- 1. DER MATRIX SPLASHSCREEN ---
 class CinematicMatrixSplash(QWidget):
     finished = pyqtSignal()
 
-    def __init__(self, duration=5000):
+    def __init__(self, duration=4000): # Auf 4 Sek gesetzt für schnelleres Testen
         super().__init__()
         self.is_closing = False
         self.os_type = platform.system()
         
-        # --- UI SETUP ---
+        self._corner_factor = 0.0  
+        self.flash_alpha = 0       
+        
         self.setWindowFlags(Qt.WindowType.SplashScreen | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.resize(1000, 650)
 
-        # LOGO (Cyber-Hex Edition)
         self.logo_text = [
             r" ◢◤━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◥◣ ",
             r" █  _______  _______  _______  _______  __   __             █ ",
@@ -4089,42 +4097,171 @@ class CinematicMatrixSplash(QWidget):
             r" █─────────── [ SYSTEM: NEURAL_LINK OPERATIONAL ] ──────────█ ",
             r" █            >> OSCAM EMU PATCH MANAGER v4.0 <<            █ ",
             r" █            >> CODENAME: SPEEDY_LEGACY   <<            █ ",
-            r" ◥◣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◢◤ ",
-            r"    [ STATUS: INJECTING PATCHES... 100% SUCCESS ]             "
+            r" ◥◣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◢◤ "
         ]
 
-        # Matrix Regen Setup
         self.chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$%&*+=-"
         self.columns = self.width() // 15
         self.drops = [random.randint(-50, 0) for _ in range(self.columns)]
         
-        layout = QVBoxLayout(self)
-        layout.addStretch(1)
+        main_grid = QGridLayout(self)
+        main_grid.setContentsMargins(0, 0, 0, 0)
+
+        self.bg_widget = QWidget()
+        self.bg_widget.setStyleSheet("background: transparent;")
+        main_grid.addWidget(self.bg_widget, 0, 0)
+
+        self.ui_container = QWidget()
+        self.ui_container.setStyleSheet("""
+            QWidget {
+                background-color: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:1, 
+                                  stop:0 rgba(0, 8, 4, 230), stop:1 rgba(0, 20, 8, 245));
+                border: 1px solid rgba(0, 255, 65, 80);
+                border-radius: 12px;
+            }
+        """)
+        
+        ui_layout = QVBoxLayout(self.ui_container)
+        ui_layout.setContentsMargins(40, 40, 40, 40)
+        
+        header_layout = QHBoxLayout()
+        self.lbl_terminal_title = QLabel("[ CORE_INIT_SEQUENCE ]")
+        self.lbl_terminal_title.setFont(QFont("Consolas", 9, QFont.Weight.Bold))
+        self.lbl_terminal_title.setStyleSheet("color: rgba(0, 255, 65, 180); border: none; background: transparent;")
+        
+        self.lbl_hardware = QLabel(f"HOST_OS: {self.os_type.upper()} // SECURE_MODE")
+        self.lbl_hardware.setFont(QFont("Consolas", 9))
+        self.lbl_hardware.setStyleSheet("color: rgba(0, 255, 65, 120); border: none; background: transparent;")
+        
+        header_layout.addWidget(self.lbl_terminal_title)
+        header_layout.addStretch()
+        header_layout.addWidget(self.lbl_hardware)
+        ui_layout.addLayout(header_layout)
+        
+        ui_layout.addStretch(2)
         
         self.lbl_logo = QLabel("\n".join(self.logo_text))
         self.lbl_logo.setFont(QFont("Consolas", 10, QFont.Weight.Bold))
-        self.lbl_logo.setStyleSheet("color: #00FF41; background: transparent;")
+        self.lbl_logo.setStyleSheet("color: #00FF41; background: transparent; border: none;")
         self.lbl_logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.lbl_logo)
+        ui_layout.addWidget(self.lbl_logo)
         
-        layout.addStretch(1)
+        ui_layout.addStretch(1)
+
+        self.lbl_live_status = QLabel(">> INITIALIZING QUANTUM BUFFER...")
+        self.lbl_live_status.setFont(QFont("Consolas", 10))
+        self.lbl_live_status.setStyleSheet("color: #00FF41; background: transparent; border: none;")
+        self.lbl_live_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ui_layout.addWidget(self.lbl_live_status)
+        ui_layout.addSpacing(10)
 
         self.pbar = QProgressBar()
-        self.pbar.setFixedSize(600, 4)
+        self.pbar.setFixedSize(700, 8)
         self.pbar.setTextVisible(False)
-        self.pbar.setStyleSheet("QProgressBar { border: none; background: rgba(0,20,0,100); } QProgressBar::chunk { background: #00FF41; }")
-        layout.addWidget(self.pbar, 0, Qt.AlignmentFlag.AlignCenter)
-        layout.addSpacing(40)
+        self.pbar.setStyleSheet("""
+            QProgressBar { border: 1px solid rgba(0, 255, 65, 100); background: rgba(0, 20, 5, 150); border-radius: 4px; } 
+            QProgressBar::chunk { background-color: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 #005511, stop:0.8 #00FF41, stop:1 #FFFFFF); border-radius: 3px; }
+        """)
+        ui_layout.addWidget(self.pbar, 0, Qt.AlignmentFlag.AlignCenter)
+        
+        ui_layout.addStretch(1)
+        footer_layout = QHBoxLayout()
+        self.lbl_footer_left = QLabel("SYS_STATUS: INJECTING_PATCHES... 100% SUCCESS")
+        self.lbl_footer_left.setFont(QFont("Consolas", 9))
+        self.lbl_footer_left.setStyleSheet("color: #00FF41; border: none; background: transparent;")
+        
+        self.lbl_percentage = QLabel("00%")
+        self.lbl_percentage.setFont(QFont("Consolas", 12, QFont.Weight.Bold))
+        self.lbl_percentage.setStyleSheet("color: #00FF41; border: none; background: transparent;")
+        
+        footer_layout.addWidget(self.lbl_footer_left)
+        footer_layout.addStretch()
+        footer_layout.addWidget(self.lbl_percentage)
+        ui_layout.addLayout(footer_layout)
 
-        # Timers
-        self.timer_draw = QTimer(self); self.timer_draw.timeout.connect(self.update); self.timer_draw.start(35)
+        main_grid.addWidget(self.ui_container, 0, 0)
+
+        self.timer_draw = QTimer(self); self.timer_draw.timeout.connect(self.update); self.timer_draw.start(25)
         self.timer_glitch = QTimer(self); self.timer_glitch.timeout.connect(self.glitch_effect); self.timer_glitch.start(120)
         
         self.prog = 0
         self.timer_prog = QTimer(self); self.timer_prog.timeout.connect(self.upd_prog); self.timer_prog.start(duration // 100)
 
-        self.play_sys_sound("start")
+        self.corner_anim = QPropertyAnimation(self, b"corner_factor")
+        self.corner_anim.setDuration(1200)                     
+        self.corner_anim.setStartValue(0.0)
+        self.corner_anim.setEndValue(1.0)
+        self.corner_anim.setEasingCurve(QEasingCurve.Type.OutBack)
+        self.corner_anim.finished.connect(self.trigger_impact_flash)
+        self.corner_anim.start()
+
         QTimer.singleShot(duration, self.finish_anim)
+
+    @pyqtProperty(float)
+    def corner_factor(self): return self._corner_factor
+    @corner_factor.setter
+    def corner_factor(self, value): self._corner_factor = value; self.update()
+
+    def trigger_impact_flash(self):
+        self.flash_alpha = 180
+        self.flash_timer = QTimer(self); self.flash_timer.timeout.connect(self.fade_flash); self.flash_timer.start(30)
+
+    def fade_flash(self):
+        if self.flash_alpha > 0: self.flash_alpha = max(0, self.flash_alpha - 30); self.update()
+        else: self.flash_timer.stop()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Matrix Regen
+        painter.setFont(QFont("Consolas", 11, QFont.Weight.Bold))
+        for i in range(len(self.drops)):
+            char = random.choice(self.chars)
+            x = i * 15 + 5
+            y = self.drops[i] * 15
+            if y > 0 and y < self.height():
+                painter.setPen(QColor(180, 255, 200, 220))
+                painter.drawText(x, y, char)
+                for j in range(1, 8):
+                    tail_y = y - (j * 15)
+                    if tail_y > 0:
+                        painter.setPen(QColor(0, 255, 65, max(0, 180 - (j * 25))))
+                        painter.drawText(x, tail_y, random.choice(self.chars))
+            self.drops[i] += 1
+            if self.drops[i] * 15 > self.height() or (self.drops[i] == 0 and random.random() > 0.95):
+                self.drops[i] = random.randint(-20, 0)
+
+        # Lines
+        painter.setPen(QColor(0, 255, 65, 10))
+        for y in range(0, self.height(), 4): painter.drawLine(0, y, self.width(), y)
+
+        # Tech-Ecken
+        w, h = self.width(), self.height()
+        offset = int((1.0 - self._corner_factor) * 100)
+        thick_pen = QPen(QColor(0, 255, 65, 255)); thick_pen.setWidth(4); painter.setPen(thick_pen)
+        L = 40 
+        painter.drawLine(0 + offset, 0 + offset, L + offset, 0 + offset); painter.drawLine(0 + offset, 0 + offset, 0 + offset, L + offset)
+        painter.drawLine(w - offset, 0 + offset, w - L - offset, 0 + offset); painter.drawLine(w - offset, 0 + offset, w - offset, L + offset)
+        painter.drawLine(0 + offset, h - offset, L + offset, h - offset); painter.drawLine(0 + offset, h - offset, 0 + offset, h - L - offset)
+        painter.drawLine(w - offset, h - offset, w - L - offset, h - offset); painter.drawLine(w - offset, h - offset, w - offset, h - L - offset)
+
+        if self.flash_alpha > 0:
+            painter.setPen(QPen(QColor(255, 255, 255, self.flash_alpha), 2))
+            painter.setBrush(QBrush(QColor(0, 255, 65, int(self.flash_alpha / 4))))
+            painter.drawRoundedRect(5, 5, w - 10, h - 10, 12, 12)
+
+    def glitch_effect(self):
+        if random.random() > 0.85 and not self.is_closing:
+            original_logo = "\n".join(self.logo_text)
+            self.lbl_logo.setText(original_logo.replace("█", random.choice(["▒", "▓", "█", "░"])))
+            QTimer.singleShot(80, lambda: self.lbl_logo.setText(original_logo))
+
+    def upd_prog(self):
+        if self.prog < 100:
+            self.prog += 1
+            self.pbar.setValue(self.prog)
+
 
     def play_sys_sound(self, trigger):
         """Plattformunabhängige Sounds ohne externe Dateien."""
