@@ -2081,12 +2081,19 @@ TEXTS = {
         "installed_version": "Installierte Version ist",
         "new_version_found": "Neue Version verfügbar",
         "oscam_emu_patch_upload": "OSCam EMU Patch hochladen",
-        # s4 install
-        "s4_install_button": "S4 Installieren",
-        "s4_tooltip": "Linksklick: Install/Update\nRechtsklick: Pfad manuell wählen",
-        "restarting_check": "System-Check wird neu gestartet...",
-        "s4_ok": "S3 OK",
-        "s4_install": "S4 Installieren",
+        # SimpleBuild 4 Installer
+        "s4_btn_install = 🚀 Installiere SimpleBuild 4"
+        "s4_btn_busy = ⏳ Installiert..."
+        "s4_btn_done = ✅ Fertig"
+         "s4_btn_error = ❌ Fehler"
+
+"s4_hint_select = SimpleBuild 4 Ordner wählen"
+"s4_path_set = SimpleBuild 4 Pfad erfolgreich gesetzt"
+"s4_folder_error = Die Datei 's4' wurde in diesem Ordner nicht gefunden!"
+"s4_create_dir_error = Fehler beim Erstellen des Ordners:"
+
+"s4_dialog_title = SimpleBuild 4 Installation"
+"s4_dialog_success = SimpleBuild 4 erfolgreich installiert!"
         # s3 install
         "s3_install_button": "S3 Installieren",
         "s3_tooltip": "Linksklick: Install/Update\nRechtsklick: Pfad manuell wählen",
@@ -11581,7 +11588,7 @@ class PatchManagerGUI(QWidget):
 
         # --- Der S3 Button ---
         self.btn_s3 = QPushButton("🚀 Install S3")
-        self.btn_s3.setFixedSize(160, self.UI_BUTTON_H)
+        self.btn_s3.setFixedSize(180, self.UI_BUTTON_H)
         self.btn_s3.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_s3.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self.btn_s3.setStyleSheet(
@@ -11611,7 +11618,7 @@ class PatchManagerGUI(QWidget):
 
         # --- Der NCam-Button ---
         self.btn_ncam = QPushButton("🚀 Install NCam-speedy")
-        self.btn_ncam.setFixedSize(180, self.UI_BUTTON_H)
+        self.btn_ncam.setFixedSize(240, self.UI_BUTTON_H)
         self.btn_ncam.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_ncam.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self.btn_ncam.setStyleSheet(
