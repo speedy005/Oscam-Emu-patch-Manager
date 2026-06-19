@@ -1,5 +1,5 @@
 # Änderungen für oscam_patch_manager.py
-Letzte Aktualisierung: 18.06.2026 09:17
+Letzte Aktualisierung: 19.06.2026 04:05
 
 ---
 
