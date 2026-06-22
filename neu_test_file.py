@@ -693,7 +693,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "5.0.0"
+APP_VERSION = "5.2.0"
 
 
 # ===================== PATCH DIRS =====================
@@ -1621,7 +1621,12 @@ TEXTS = {
         "github_version_available": "New version available: {version}",
         "github_version_fetch_failed": "Version check failed: {error}",
         # s3 install check
+
         "s3_install_button": "Install S3",
+        "s3_tooltip": "Left-click: Install/Update\nRight-click: Select path manually",
+        "restarting_check": "Restarting system check...",
+        # s4 install check
+        "s4_install_button": "Install S3",
         "s3_tooltip": "Left-click: Install/Update\nRight-click: Select path manually",
         "restarting_check": "Restarting system check...",
         # ... Log save ...
@@ -2082,7 +2087,6 @@ TEXTS = {
         "new_version_found": "Neue Version verfügbar",
         "oscam_emu_patch_upload": "OSCam EMU Patch hochladen",
         # s4 install
-        "s4_install": "S4 Installieren",
         "s4_install_button": "S4 Installieren",
         "s4_tooltip": "Linksklick: Install/Update\nRechtsklick: Pfad manuell wählen",
         "restarting_check": "System-Check wird neu gestartet...",
@@ -2222,39 +2226,63 @@ fill_missing_keys(TEXTS)
 
 def save_config(cfg_updates, gui_instance=None, silent=False):
     """
-    Speichert Config-Updates und synchronisiert Timer, ProgressBar, Theme sowie S3 & NCam Pfade.
+    Speichert Config-Updates und synchronisiert Timer, ProgressBar, Theme sowie S3, S4 & NCam Pfade.
+    Pfade werden plattformunabhängig für Windows 11 und Linux normalisiert.
+    FIX: Verhindert das Zurückspringen auf Classics, indem 'color' und 'theme_mode' gleichermaßen geprüft werden.
     """
-    import os, json
+    import os, json, platform
     from PyQt6.QtCore import QTimer
+
+    # Sicherstellen, dass CONFIG_FILE global bekannt ist
+    CONFIG_FILE = globals().get("CONFIG_FILE", "config.json")
 
     try:
         # 1. Bestehende Config laden
         current_cfg = {}
         if os.path.exists(CONFIG_FILE):
             try:
-                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                with open(CONFIG_FILE, "w" if not os.path.exists(CONFIG_FILE) else "r", encoding="utf-8") as f:
                     current_cfg = json.load(f)
             except:
                 current_cfg = {}
 
+        # --- OS-SCHUTZ: Pfade vor dem Mergen plattformunabhängig säubern ---
+        is_win = platform.system() == "Windows"
+        path_keys = ["work_dir", "s3_patch_path", "s3_custom_path", "ncam_custom_path", "s4_custom_path"]
+        
+        for key in list(cfg_updates.keys()):
+            if key in path_keys and isinstance(cfg_updates[key], str):
+                path_val = cfg_updates[key]
+                # Fall Linux: Windows-Laufwerksbuchstaben wie C:\ entfernen
+                if not is_win and len(path_val) > 1 and path_val[1] == ":":
+                    path_val = path_val[2:]  # Macht aus C:\opt\s3 -> \opt\s3
+                
+                # Slashes/Backslashes für das aktuelle OS korrigieren
+                cfg_updates[key] = os.path.normpath(path_val)
+
         # 2. Mergen der neuen Updates
         current_cfg.update(cfg_updates)
 
-        # 3. Globale Variablen setzen
-        globals()["S3_PATH"] = current_cfg.get("s3_custom_path", "/opt/s3")
-        globals()["NCAM_PATH"] = current_cfg.get(
-            "ncam_custom_path", "/opt/s3_ncam_bonecrew_test"
-        )
+        # 3. Globale Variablen setzen (mit OS-optimierten Fallbacks)
+        default_s3 = "C:\\s3" if is_win else "/opt/s3"
+        default_ncam = "C:\\opt\\ncam" if is_win else "/opt/s3_ncam_bonecrew_test"
+        default_s4 = "C:\\opt\\s4" if is_win else "/opt/s4"
+
+        globals()["S3_PATH"] = current_cfg.get("s3_custom_path", default_s3)
+        globals()["NCAM_PATH"] = current_cfg.get("ncam_custom_path", default_ncam)
+        globals()["S4_PATH"] = current_cfg.get("s4_custom_path", default_s4)
         globals()["THEME_MODE"] = current_cfg.get("theme_mode", "standard")
         globals()["BLINK_SPEED"] = current_cfg.get("blink_speed", 500)
 
         # 4. System-Werte & Pfad-Synchronisation
         if gui_instance:
-            # S3 / NCam Pfade GUI-intern setzen
+            # S3 / NCam / S4 Pfade GUI-intern setzen
             if "s3_custom_path" in cfg_updates:
                 gui_instance.S3_PATH = cfg_updates["s3_custom_path"]
             if "ncam_custom_path" in cfg_updates:
                 gui_instance.NCAM_PATH = cfg_updates["ncam_custom_path"]
+            if "s4_custom_path" in cfg_updates:
+                gui_instance.S4_PATH = cfg_updates["s4_custom_path"]
 
             # Timer-Logik für LEDs/Blinken
             blink_speed = current_cfg.get("blink_speed", 500)
@@ -2277,12 +2305,19 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
                     if not timer.isActive():
                         timer.start()
 
-            # Theme in GUI anwenden
-            theme = current_cfg.get("theme_mode", "standard")
-            if theme == "matrix" and hasattr(gui_instance, "enable_matrix_theme"):
-                gui_instance.enable_matrix_theme()
-            elif theme != "matrix" and hasattr(gui_instance, "enable_standard_theme"):
-                gui_instance.enable_standard_theme()
+            # --- THEME FIX: Intelligente Prüfung von 'color' und 'theme_mode' ---
+            theme = str(current_cfg.get("theme_mode", "standard")).lower()
+            color = str(current_cfg.get("color", "Classics")).lower()
+            
+            # Wenn in einem der beiden Felder "matrix" steht, erzwingen wir das Matrix-Theme
+            if "matrix" in theme or "matrix" in color:
+                if hasattr(gui_instance, "enable_matrix_theme"):
+                    gui_instance.enable_matrix_theme()
+                current_cfg["theme_mode"] = "matrix"  # Datei synchron halten
+            else:
+                if hasattr(gui_instance, "enable_standard_theme"):
+                    gui_instance.enable_standard_theme()
+                current_cfg["theme_mode"] = "standard"  # Datei synchron halten
 
         # 5. Speichern in die Datei
         with open(os.path.abspath(CONFIG_FILE), "w", encoding="utf-8") as f:
@@ -2301,11 +2336,7 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
                 lang = getattr(gui_instance, "LANG", "de").lower()[:2]
 
                 if is_closing:
-                    msg = (
-                        "✅ Beendet & Gespeichert"
-                        if lang == "de"
-                        else "✅ Exit & Saved"
-                    )
+                    msg = "✅ Beendet & Gespeichert" if lang == "de" else "✅ Exit & Saved"
                     log_color = "#FFD700"
                     pbar_style = (
                         "QProgressBar::chunk {"
@@ -2315,16 +2346,9 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
                         "border-radius:5px;}"
                     )
                 else:
-                    msg = (
-                        "✅ Einstellungen gespeichert"
-                        if lang == "de"
-                        else "✅ Settings saved"
-                    )
-                    log_color = (
-                        "#00FF41"
-                        if current_cfg.get("theme_mode") == "matrix"
-                        else "#00FFFF"
-                    )
+                    msg = "✅ Einstellungen gespeichert" if lang == "de" else "✅ Settings saved"
+                    # Nutzt die aktualisierte theme-Variable für die Log-Farbe
+                    log_color = "#00FF41" if "matrix" in str(current_cfg.get("theme_mode")).lower() else "#00FFFF"
                     pbar_style = "QProgressBar::chunk { background-color: #2ecc71; border-radius: 5px; }"
 
                 # Progressbar Update
@@ -2357,11 +2381,13 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
         print(f"Fehler beim Speichern: {e}")
 
 
+
+
 # ===================== CONFIG =====================
 def load_config(gui_instance=None):
     """
     Lädt die Config, korrigiert Pfade für Windows/Linux, ergänzt fehlende Keys
-    und synchronisiert die GUI. Optimiert für Oracle VM & Windows.
+    und synchronisiert die GUI. Optimiert für Oracle VM, Linux & Windows.
     """
     import os, json, platform
 
@@ -2376,6 +2402,7 @@ def load_config(gui_instance=None):
     # --- Dynamische Standard-Pfade je nach OS ---
     default_s3 = "C:\\s3" if is_win else "/opt/s3"
     default_ncam = "C:\\opt\\ncam" if is_win else "/opt/s3_ncam_bonecrew_test"
+    default_s4 = "C:\\opt\\s4" if is_win else "/opt/s4"
 
     default_cfg = {
         "commit_count": 5,
@@ -2384,6 +2411,7 @@ def load_config(gui_instance=None):
         "s3_patch_path": os.path.normpath(base_patch_dir),
         "s3_custom_path": default_s3,
         "ncam_custom_path": default_ncam,
+        "s4_custom_path": default_s4,
         "patch_modifier": "speedy005",
         "EMUREPO": CORRECT_URL,
         "theme_mode": "standard",
@@ -2410,16 +2438,22 @@ def load_config(gui_instance=None):
 
         # --- Fehlende Keys ergänzen & Pfade normalisieren ---
         needs_save = False
+        path_keys = ["s3_custom_path", "ncam_custom_path", "s3_patch_path", "s4_custom_path"]
+        
         for key, value in default_cfg.items():
             if key not in cfg:
                 cfg[key] = value
                 needs_save = True
             
             # WICHTIG: Bestehende Pfade aus der Config an das aktuelle OS anpassen
-            # (Verhindert Fehler, wenn die config.json von Linux auf Windows kopiert wurde)
-            if key in ["s3_custom_path", "ncam_custom_path", "s3_patch_path"]:
+            if key in path_keys and isinstance(cfg[key], str):
                 old_path = cfg[key]
-                cfg[key] = os.path.normpath(cfg[key])
+                
+                # FIX: Korrekte Prüfung auf Doppelpunkt bei Windows-Laufwerken unter Linux
+                if not is_win and len(old_path) > 1 and old_path[1] == ":":
+                    old_path = old_path[2:]
+                
+                cfg[key] = os.path.normpath(old_path)
                 if cfg[key] != old_path:
                     needs_save = True
 
@@ -2436,18 +2470,20 @@ def load_config(gui_instance=None):
             except Exception as e:
                 print(f"⚠️ Fehler beim Speichern der Config: {e}")
 
-        # --- Globale Variablen setzen ---
+        # --- Globale Variables setzen ---
         globals()["EMUREPO"] = cfg["EMUREPO"]
         globals()["PATCH_MODIFIER"] = cfg["patch_modifier"]
         globals()["THEME_MODE"] = cfg.get("theme_mode", "standard")
         globals()["BLINK_SPEED"] = cfg.get("blink_speed", 500)
         globals()["S3_PATH"] = cfg["s3_custom_path"]
         globals()["NCAM_PATH"] = cfg["ncam_custom_path"]
+        globals()["S4_PATH"] = cfg["s4_custom_path"]
 
         # --- GUI-Integration ---
         if gui_instance:
             gui_instance.S3_PATH = cfg["s3_custom_path"]
             gui_instance.NCAM_PATH = cfg["ncam_custom_path"]
+            gui_instance.S4_PATH = cfg["s4_custom_path"]
             gui_instance.current_config = cfg
 
             # Buttons Höhe setzen
@@ -2456,10 +2492,16 @@ def load_config(gui_instance=None):
                 for btn in gui_instance.all_buttons:
                     btn.setFixedHeight(button_height)
 
-            # Theme anwenden
-            theme = cfg.get("theme_mode", "standard")
-            if hasattr(gui_instance, "enable_standard_theme"):
-                gui_instance.enable_standard_theme() # Erstmal sauberer Standard-State
+            # --- THEME FIX: Dynamische Prüfung von 'color' und 'theme_mode' ---
+            theme_color = str(cfg.get("color", "Classics")).lower()
+            theme_mode = str(cfg.get("theme_mode", "standard")).lower()
+
+            if "matrix" in theme_color or "matrix" in theme_mode:
+                if hasattr(gui_instance, "enable_matrix_theme"):
+                    gui_instance.enable_matrix_theme()
+            else:
+                if hasattr(gui_instance, "enable_standard_theme"):
+                    gui_instance.enable_standard_theme()
 
             # LEDs / Blink-Timer synchronisieren
             led_enabled = cfg.get("led_enabled", True)
@@ -2483,6 +2525,8 @@ def load_config(gui_instance=None):
     except Exception as e:
         print(f"⚠️ Kritischer Config Fehler: {e}")
         return default_cfg.copy()
+
+
 
 
 # ===================== INFOSCREEN =====================
@@ -4094,7 +4138,7 @@ from PyQt6.QtGui import QFont
 import os, random, platform, subprocess
 
 
-import os, sys, platform, subprocess, locale, importlib.util, threading, shutil, ctypes, random, winreg, winsound
+import os, sys, platform, subprocess, locale, importlib.util, threading, shutil, ctypes, random
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QProgressBar, QMessageBox
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QPainter, QColor
@@ -4178,7 +4222,7 @@ class CinematicMatrixSplash(QWidget):
             r" █ |_______||_______||__| |__||_______||_|   |_|            █ ",
             r" █                                                          █ ",
             r" █─────────── [ SYSTEM: NEURAL_LINK OPERATIONAL ] ──────────█ ",
-            r" █            >> OSCAM EMU PATCH MANAGER v4.0 <<            █ ",
+            r" █            >> OSCAM EMU PATCH MANAGER v5.2.0 <<            █ ",
             r" █            >> CODENAME: SPEEDY_LEGACY   <<            █ ",
             r" ◥◣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◢◤ "
         ]
@@ -5164,64 +5208,144 @@ class PatchManagerGUI(QWidget):
                 "NCam Installation" if is_de else "NCam Setup", 
                 message
             )
-    def select_s4_path_manually(self):
-        """Dialog zur manuellen Auswahl des SimpleBuild 4 Pfads."""
+    def select_s4_path_manually(self, pos=None):
+        """
+        Dialog zur manuellen Auswahl des SimpleBuild 4 Pfads.
+        Validiert plattformspezifisch auf 'simplebuild.exe' oder 'simplebuild'.
+        """
         from PyQt6.QtWidgets import QFileDialog, QMessageBox
-        import os
+        import os, platform
 
-        lang = getattr(self, "LANG", "de").lower()
+        lang = getattr(self, "LANG", "de").lower()[:2]
         t = {
-            "de": {"hint": "S4 Ordner wählen", "ok": "S4 Pfad gesetzt"},
-            "en": {"hint": "Select S4 folder", "ok": "S4 path set"},
-        }.get(lang, {"hint": "Select SimpleBuild 4 folder", "ok": "S4 path set"})
+            "de": {
+                "hint": "S4 Ordner wählen", 
+                "ok": "S4 Pfad gesetzt",
+                "err_title": "Fehler",
+                "err_msg": "Die ausführbare Datei '{exe}' wurde in diesem Ordner nicht gefunden!"
+            },
+            "en": {
+                "hint": "Select S4 folder", 
+                "ok": "S4 path set",
+                "err_title": "Error",
+                "err_msg": "The executable file '{exe}' was not found in this folder!"
+            },
+        }.get(lang, {
+            "hint": "Select SimpleBuild 4 folder", 
+            "ok": "S4 path set",
+            "err_title": "Error",
+            "err_msg": "The executable file '{exe}' was not found in this folder!"
+        })
 
-        start_path = getattr(self, "S4_PATH", "/opt/simplebuild4")
+        # Bestimme die richtige ausführbare Datei je nach Betriebssystem (Analog zu update_ui_texts)
+        is_win = platform.system() == "Windows"
+        exe_name = "simplebuild.exe" if is_win else "simplebuild"
+
+        # Startpfad ermitteln (Fallback auf sinnvollen OS-Standard)
+        default_start = "C:\\opt" if is_win else "/opt"
+        start_path = getattr(self, "S4_PATH", default_start)
+        if not os.path.exists(start_path):
+            start_path = os.path.expanduser("~")
+
         chosen_dir = QFileDialog.getExistingDirectory(self, t["hint"], start_path)
 
-        if chosen_dir and os.path.exists(os.path.join(chosen_dir, "s4")):
-            self.S4_PATH = chosen_dir
-            save_config({"s4_custom_path": self.S4_PATH}, gui_instance=self)
-            self.update_ui_texts()
-            QMessageBox.information(self, "OK", f"{t['ok']}:\n{chosen_dir}")
+        if not chosen_dir:
+            return  # Abbruch durch den Nutzer
+
+        # Pfad säubern und normalisieren (Wichtig für Windows/Linux-Wechsel)
+        normalized_dir = os.path.normpath(chosen_dir)
+
+        # Prüfe auf die korrekte, betriebssystemabhängige ausführbare Datei
+        if os.path.exists(os.path.join(normalized_dir, exe_name)):
+            self.S4_PATH = normalized_dir
+            
+            # Zentrales Speichern in der Config
+            if "save_config" in globals():
+                save_config({"s4_custom_path": self.S4_PATH}, gui_instance=self, silent=True)
+                
+            # UI direkt aktualisieren, damit der Button sofort grün wird ("S4 OK")
+            if hasattr(self, "update_ui_texts"):
+                self.update_ui_texts()
+                
+            QMessageBox.information(self, "OK", f"{t['ok']}:\n{normalized_dir}")
         else:
-            QMessageBox.warning(self, "Error", "Datei 's4' nicht im Ordner gefunden!")
+            QMessageBox.warning(
+                self, 
+                t["err_title"], 
+                t["err_msg"].format(exe=exe_name)
+            )
+
 
     def start_s4_install(self):
-        """Startet die SimpleBuild 4 Installation."""
-        from PyQt6.QtWidgets import QFileDialog
-        import platform
-        import os
+        """Startet die SimpleBuild 4 Installation über Worker, Pfad wählbar und OS-optimiert."""
+        import os, platform
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+
         if hasattr(self, "hide_final_label"):
             self.hide_final_label()
 
         is_de = getattr(self, "LANG", "de") == "de"
-        # Windows-tauglicher Startpfad für den Dialog
-        default_start = "C:\\" if platform.system() == "Windows" else "/opt"
-        start_path = getattr(self, "S4_PATH", default_start)
+        is_win = platform.system() == "Windows"
+
+        # 1. Intelligenten Startpfad für den Dialog wählen
+        # Falls S4_PATH noch nicht gesetzt ist, nehmen wir einen sinnvollen Standard
+        default_base = "C:\\opt" if is_win else "/opt"
+        start_path = getattr(self, "S4_PATH", os.path.expanduser("~"))
+    
+        # Falls der aktuelle Pfad nicht existiert, nimm die Basis
+        if not os.path.exists(start_path):
+            start_path = default_base if os.path.exists(default_base) else os.path.expanduser("~")
 
         chosen_dir = QFileDialog.getExistingDirectory(
-            self, 
-            "Installationsordner wählen" if is_de else "Select Installation Folder",
-            start_path
+            self,
+            "Wähle S4 Installationsordner" if is_de else "Select S4 Installation Folder",
+            start_path,
         )
 
         if not chosen_dir:
-            return 
+            return  # Abbruch durch Nutzer
 
-        # Pfad säubern (Wichtig für Windows!)
+        # --- WINDOWS & VM FIX: Pfad normalisieren ---
+        # Macht aus / und \ den jeweils richtigen Trenner für das OS
         self.S4_PATH = os.path.normpath(chosen_dir)
-    
-        try:
-            os.makedirs(self.S4_PATH, exist_ok=True)
-            self.btn_s4.setEnabled(False)
-            self.btn_s4.setText("⏳ ..." if is_de else "⏳ Busy...")
 
-            # Worker starten (Nutzt jetzt den S4InstallWorker)
-            self.s4_worker = S4InstallWorker(self.S4_PATH)
-            self.s4_worker.finished_signal.connect(self.on_s4_finished)
-            self.s4_worker.start()
+        try:
+            # Ordner erstellen (Dank deines Admin-Elevators klappt das auch auf C:\)
+            os.makedirs(self.S4_PATH, exist_ok=True)
+        
+            # Test-Schreibzugriff (nur um sicherzugehen)
+            test_file = os.path.join(self.S4_PATH, ".permissions_test")
+            with open(test_file, "w") as f:
+                f.write("test")
+            os.remove(test_file)
+
         except Exception as e:
-            self.on_s4_finished(False, f"Fehler beim Erstellen des Ordners: {str(e)}")
+            QMessageBox.critical(
+                self, 
+                "Error", 
+                f"Keine Schreibrechte in diesem Ordner!\n{str(e)}" if is_de 
+                else f"No write permissions in this folder!\n{str(e)}"
+            )
+            return
+
+        # 🚨 FIX: Den neu gewählten Pfad sofort dauerhaft in der config.json sichern 🚨
+        if "save_config" in globals():
+            save_config({"s4_custom_path": self.S4_PATH}, gui_instance=self, silent=True)
+
+        # 2. UI Feedback mit korrekter deutscher Übersetzung
+        self.btn_s4.setEnabled(False)
+        busy_text = "⏳ Installation läuft..." if is_de else "⏳ Installing..."
+        self.btn_s4.setText(busy_text)
+    
+        if hasattr(self, "log"): # Falls deine GUI eine Log-Funktion hat
+           self.log("s4_patch_create_clone_start", "info") 
+
+        # 3. Worker starten
+        self.s4_worker = S4InstallWorker(self.S4_PATH)
+        self.s4_worker.finished_signal.connect(self.on_s4_finished)
+        self.s4_worker.start()
+
+
 
     def on_s4_finished(self, success, message):
         """Nach Abschluss des Workers für SimpleBuild 4."""
@@ -5245,15 +5369,11 @@ class PatchManagerGUI(QWidget):
             # 2. Instanz-Variable und Config permanent aktualisieren
             self.S4_PATH = new_path
             # Speichert den Pfad in der json, damit er beim nächsten Start direkt da ist
-            save_config({"s4_custom_path": self.S4_PATH}, gui_instance=self)
-
-            # 3. Visuelles Feedback
-            self.btn_s4.setStyleSheet(
-                "background-color: green; color: white; font-weight: bold; border-radius: 5px;"
-            )
-            self.btn_s4.setText("✅ Fertig" if is_de else "✅ Done")
+            if "save_config" in globals():
+                save_config({"s4_custom_path": self.S4_PATH}, gui_instance=self, silent=True)
             
-            # UI-Texte (Labels etc.) aktualisieren, falls die Funktion existiert
+            # 3. Visuelles Feedback über die zentrale UI-Logik steuern
+            # Das sorgt für den korrekten "S4 OK" Text und das perfekte grüne Design
             if hasattr(self, "update_ui_texts"):
                 self.update_ui_texts()
 
@@ -5263,16 +5383,16 @@ class PatchManagerGUI(QWidget):
                 f"{message}\n\nPfad: {self.S4_PATH}" if is_de else f"{message}\n\nPath: {self.S4_PATH}"
             )
         else:
-            # Fehler-Zustand
-            self.btn_s4.setStyleSheet(
-                "background-color: #e74c3c; color: white; font-weight: bold; border-radius: 5px;"
-            )
-            self.btn_s4.setText("❌ Fehler" if is_de else "❌ Error")
+            # Fehler-Zustand: Wir updaten das UI, damit der Button orange bleibt (bereit für neuen Versuch)
+            if hasattr(self, "update_ui_texts"):
+                self.update_ui_texts()
+                
             QMessageBox.critical(
                 self, 
                 "SimpleBuild 4 Installation" if is_de else "SimpleBuild 4 Setup", 
                 message
             )
+
     # ========================== S3 ==========================
     
 
@@ -5363,26 +5483,30 @@ class PatchManagerGUI(QWidget):
         self.s3_worker.start()
 
     def on_s3_finished(self, success, message):
-        """Nach Abschluss des Workers."""
+        """Nach Abschluss des Workers für S3."""
+        from PyQt6.QtWidgets import QMessageBox
+
         is_de = getattr(self, "LANG", "de") == "de"
         self.btn_s3.setEnabled(True)
 
+        # Visuelles Feedback über die zentrale UI-Logik steuern.
+        # Das sucht nach der s3 Binary und setzt das perfekte grüne oder orange Design auf.
+        if hasattr(self, "update_ui_texts"):
+            self.update_ui_texts()
+
         if success:
-            self.btn_s3.setStyleSheet(
-                "background-color: green; color: white; font-weight: bold;"
-            )
-            self.btn_s3.setText("✅ Fertig" if is_de else "✅ Done")
             QMessageBox.information(
-                self, "S3 Installation" if is_de else "S3 Setup", message
+                self, 
+                "S3 Installation" if is_de else "S3 Setup", 
+                message
             )
         else:
-            self.btn_s3.setStyleSheet(
-                "background-color: red; color: white; font-weight: bold;"
-            )
-            self.btn_s3.setText("❌ Fehler" if is_de else "❌ Error")
             QMessageBox.critical(
-                self, "S3 Installation" if is_de else "S3 Setup", message
+                self, 
+                "S3 Installation" if is_de else "S3 Setup", 
+                message
             )
+
 
         from PyQt6.QtCore import QTimer
 
@@ -5722,7 +5846,63 @@ class PatchManagerGUI(QWidget):
 
             # Fallback: Nur leeres Terminal öffnen
             self.open_terminal()
+    def start_s4_menu(self):
+        """Sucht s4 (bevorzugt Config-Pfad) und startet das Terminal mit 'sudo ./s4 menu'."""
 
+        # --- Final Label ausblenden ---
+        if hasattr(self, "hide_final_label"):
+            self.hide_final_label()
+        elif hasattr(self, "final_label") and self.final_label:
+            self.final_label.hide()
+
+        import os, shutil, platform
+
+        s4_exec = None
+        is_de = getattr(self, "LANG", "de") == "de"
+        s4_binary = "s4.exe" if platform.system() == "Windows" else "s4"
+
+        # 1. Dynamische Suchliste: Config-Pfad hat immer Vorrang!
+        search_list = [
+            os.path.join(
+                getattr(self, "S4_PATH", "/opt/s4"), s4_binary
+            ),  # Dein gewählter Pfad
+            "/opt/s4_neu/" + s4_binary,
+            "/opt/s4/" + s4_binary,
+            os.path.expanduser(f"~/s4/{s4_binary}"),
+            shutil.which("s4"),
+        ]
+
+        # 2. Den ersten Treffer finden
+        for path in search_list:
+            if path and os.path.exists(path) and os.access(path, os.X_OK):
+                s4_exec = path
+                break
+
+        # 3. Ausführung oder Fehlermeldung
+        if s4_exec:
+            # Info-Log für den User (Optional)
+            if hasattr(self, "append_info"):
+                msg = f"🚀 S4 Menü: {s4_exec}"
+                self.append_info(self.info_text, msg, "info")
+
+            # Startet Terminal mit sudo (für Toolchains/Build-Rechte)
+            self.open_terminal(s4_path=s4_exec, use_sudo=True)
+
+        else:
+            # Sprachabhängige Fehlermeldung
+            err_msg = (
+                "❌ Fehler: s4 Startdatei nicht gefunden!"
+                if is_de
+                else "❌ Error: s4 executable not found!"
+            )
+            if hasattr(self, "info_text"):
+                self.info_text.append(
+                    f'<br><span style="color:red;"><b>{err_msg}</b></span>'
+                )
+
+            # Fallback: Nur leeres Terminal öffnen
+            self.open_terminal()
+    
     def start_ncam_menu(self):
         """Sucht NCam (spezifisch im Bonecrew-Pfad) und startet das Terminal mit 'sudo ./s3 menu'."""
 
@@ -7449,7 +7629,9 @@ class PatchManagerGUI(QWidget):
     def change_colors(self):
         """
         Aktualisiert das Farbschema und erzwingt den LED-Status.
-        FIX: Verhindert Ghost-Blinking, indem LED-Zustände NACH dem Repaint erzwungen werden.
+        FIX 1: Verhindert Ghost-Blinking, indem LED-Zustände NACH dem Repaint erzwungen werden.
+        FIX 2: Verhindert Zurückspringen auf Classics beim Start durch intelligentes Config-Fallback.
+        FIX 3: Synchronisiert theme_mode für Matrix_Pro & schützt Installations-Buttons vor Farb-Überschreibung.
         """
 
         # --- Final-Label ausblenden ---
@@ -7459,11 +7641,16 @@ class PatchManagerGUI(QWidget):
             self.final_label.hide()
         global current_diff_colors, current_color_name
 
-        # 1️⃣ Aktuelle Farbe ermitteln
-        if hasattr(self, "color_box") and self.color_box.currentText():
-            current_color_name = self.color_box.currentText()
+        # 1️⃣ Aktuelle Farbe ermitteln (Sicherer Abgleich zwischen GUI-Box und Config-Datei)
+        config_obj = getattr(self, "cfg", getattr(self, "current_config", {}))
+        saved_color = config_obj.get("color", "Classics")
+
+        # Wenn das Tool noch im Startvorgang lädt, erzwingen wir den echten Wert aus der JSON.
+        # Das verhindert, dass die noch nicht initialisierte ComboBox blind "Classics" triggert.
+        if getattr(self, "is_loading", False) or not hasattr(self, "color_box") or not self.color_box.currentText():
+            current_color_name = saved_color
         else:
-            current_color_name = getattr(self, "cfg", {}).get("color", "Classics")
+            current_color_name = self.color_box.currentText()
 
         # 2️⃣ Basis-Farben & 3️⃣ Vorbereitung
         base_colors = DIFF_COLORS.get(
@@ -7492,7 +7679,6 @@ class PatchManagerGUI(QWidget):
         # 4️⃣ FARBEN IM UI ANWENDEN
 
         # A) Zuerst das allgemeine Repaint (Labels, Header, etc.)
-        # WICHTIG: Das setzt oft LEDs auf Standardwerte zurück -> daher ZUERST ausführen.
         if hasattr(self, "repaint_ui_colors"):
             self.repaint_ui_colors()
 
@@ -7506,7 +7692,12 @@ class PatchManagerGUI(QWidget):
                 background-color: #4d4d4d; border: 1px solid {fg}; color: white !important; 
             }}
         """
+        
+        # AUSNAHME: Die 3 neuen Installations-Buttons müssen orange bleiben und werden geschützt!
+        ignored_buttons = ["btn_s3", "btn_s4", "btn_ncam"]
         for btn in self.findChildren(QPushButton):
+            if btn.objectName() in ignored_buttons or any(getattr(self, name, None) == btn for name in ignored_buttons):
+                continue  # Überspringe das Einfärben für diese Buttons, damit das Layout greift
             btn.setStyleSheet(button_style)
 
         # C) Stats-Checkbox Styling
@@ -7526,19 +7717,14 @@ class PatchManagerGUI(QWidget):
         # =====================================================================
         # 🚨 DER LED-FIX: STATUS ALS ALLERLETZTES ERZWINGEN 🚨
         # =====================================================================
-        # Wir holen den echten Status aus der Config
-        is_led_enabled = getattr(self, "cfg", {}).get("led_enabled", True)
+        is_led_enabled = config_obj.get("led_enabled", True)
 
-        # Timer kurz stoppen, um Interferenzen während des Style-Updates zu vermeiden
         if hasattr(self, "blink_timer"):
             self.blink_timer.stop()
 
-        # Jetzt force_user_leds_static aufrufen.
-        # Da dies NACH repaint_ui_colors passiert, wird das "Aufblitzen" sofort überschrieben.
         if hasattr(self, "force_user_leds_static"):
             self.force_user_leds_static()
 
-        # Nur wenn sie an sein sollen, den Timer mit der aktuellen Geschwindigkeit wieder starten
         if is_led_enabled:
             speed_val = (
                 self.slider_speed.value() if hasattr(self, "slider_speed") else 500
@@ -7546,42 +7732,24 @@ class PatchManagerGUI(QWidget):
             if 10 <= speed_val < 950:
                 if hasattr(self, "blink_timer"):
                     self.blink_timer.start(speed_val)
-        # E) Badges & Titel Styling (Dynamisch ans Theme angepasst)
+                    
+        # E) Badges & Titel Styling
         badge_style = f"""
-            QFrame {{
-                background-color: {bg}; 
-                border: 1px solid #444; 
-                border-radius: 6px;
-            }}
-            QFrame:hover {{
-                border: 1px solid {fg}; 
-            }}
+            QFrame {{ background-color: {bg}; border: 1px solid #444; border-radius: 6px; }}
+            QFrame:hover {{ border: 1px solid {fg}; }}
         """
 
         if hasattr(self, "left_badge"):
             self.left_badge.setStyleSheet(badge_style)
 
-        # HIER DER FIX FÜR DEN TITEL:
         if hasattr(self, "header_label"):
             self.header_label.setStyleSheet(
-                f"""
-                QLabel {{
-                    color: {fg}; 
-                    font-weight: bold; 
-                    font-size: 15px; 
-                    background: transparent; 
-                    border: none;
-                }}
-            """
+                f"QLabel {{ color: {fg}; font-weight: bold; font-size: 15px; background: transparent; border: none; }}"
             )
 
         if hasattr(self, "right_badge"):
-            # Rechts bleibt der Hintergrund oft transparent für die Animation
             self.right_badge.setStyleSheet(
-                f"""
-                QFrame {{ background-color: transparent; border: 1px solid #444; border-radius: 6px; }}
-                QFrame:hover {{ border: 1px solid {fg}; }}
-            """
+                f"QFrame {{ background-color: transparent; border: 1px solid #444; border-radius: 6px; }} QFrame:hover {{ border: 1px solid {fg}; }}"
             )
             if hasattr(self, "status_label"):
                 self.status_label.setStyleSheet(
@@ -7589,13 +7757,27 @@ class PatchManagerGUI(QWidget):
                 )
         # =====================================================================
 
-        # 5️⃣ ZENTRAL SPEICHERN
+        # 5️⃣ ZENTRAL SPEICHERN & MATRIX_PRO MODUS SYNCHRONISIEREN
         if not getattr(self, "is_loading", False):
-            config = getattr(self, "cfg", {})
-            if config.get("color") != current_color_name:
-                config["color"] = current_color_name
+            if config_obj.get("color") != current_color_name:
+                config_obj["color"] = current_color_name
+                
+                # Wenn Matrix_Pro gewählt ist, erzwingen wir "matrix" für den theme_mode
+                if "matrix" in str(current_color_name).lower():
+                    config_obj["theme_mode"] = "matrix"
+                else:
+                    config_obj["theme_mode"] = "standard"
+                
+                # Instanz-Zuweisung aktualisieren
+                if hasattr(self, "cfg"):
+                    self.cfg = config_obj
+                if hasattr(self, "current_config"):
+                    self.current_config = config_obj
+
                 if "save_config" in globals():
-                    save_config(config, gui_instance=self, silent=True)
+                    save_config(config_obj, gui_instance=self, silent=True)
+
+
 
     def log_message(self, message):
         """Zentrale Funktion: Zeit in ROT, Inhalt in CYAN - sauber untereinander."""
@@ -8969,7 +9151,7 @@ class PatchManagerGUI(QWidget):
 
     def setup_option_buttons(self, parent_layout):
         """Erstellt die mittleren Buttons mit HTML-Tooltips, Regenbogen-Progress und Sound."""
-        from PyQt6.QtWidgets import QGridLayout, QWidget, QSizePolicy, QApplication
+        from PyQt6.QtWidgets import QGridLayout, QWidget, QSizePolicy, QApplication, QPushButton
         from PyQt6.QtGui import QFont
         from PyQt6.QtCore import Qt, QTimer
 
@@ -8977,7 +9159,6 @@ class PatchManagerGUI(QWidget):
         lang = str(getattr(self, "LANG", "de")).lower()[:2]
         is_de = lang == "de"
 
-        # Button-Definitionen (Key, Text_Key, Farbe, Callback, FG, Icon, Tooltip_DE, Tooltip_EN)
         button_defs = [
             (
                 "git_status",
@@ -9079,6 +9260,18 @@ class PatchManagerGUI(QWidget):
                 "🚀 <b>S3 Menü:</b> Öffnet das Standard s3_simplebuild Terminal.",
                 "🚀 <b>S3 Menu:</b> Opens the standard s3_simplebuild terminal.",
             ),
+            # ✅ S4 BUTTON HIER EINGEFÜGT (direkt vor Fix Permissions)
+            (
+                "s4_menu",
+                " s4_simplebuild",
+                "#00E5FF",
+                self.start_s4_menu,
+                "black",
+                "SP_FileDialogDetailedView",
+                "🚀 <b>S4 Menü:</b> Öffnet das S4 Simplebuild Terminal.",
+                "🚀 <b>S4 Menu:</b> Opens the S4 Simplebuild terminal.",
+            ),
+
             (
                 "ncam_menu",
                 " NCam Bonecrew",
@@ -9089,18 +9282,19 @@ class PatchManagerGUI(QWidget):
                 "🏴‍☠️ <b>NCam:</b> Startet das spezialisierte NCam Bonecrew Menü.",
                 "🏴‍☠️ <b>NCam:</b> Launches the specialized NCam Bonecrew menu.",
             ),
-        
+
             (
-                "fix_perms", 
-                " Fix Permissions", 
-                "#D3D3D3", 
-                self.fix_all_tool_permissions, 
-                "black", 
-                "SP_DialogNoButton", 
-                "🔓 <b>Rechte:</b> Fixiert Schreibrechte für alle Ordner/Dateien.", 
-                "🔓 <b>Rights:</b> Fixes write permissions for all folders/files."
+                "fix_perms",
+                " Fix Permissions",
+                "#D3D3D3",
+                self.fix_all_tool_permissions,
+                "black",
+                "SP_DialogNoButton",
+                "🔓 <b>Rechte:</b> Fixiert Schreibrechte für alle Ordner/Dateien.",
+                "🔓 <b>Rights:</b> Fixes write permissions for all folders/files.",
             ),
         ]
+
         container = QWidget()
         options_grid = QGridLayout(container)
         options_grid.setSpacing(6)
@@ -9113,29 +9307,22 @@ class PatchManagerGUI(QWidget):
         cols_per_row = 5
         FLACH_HEIGHT = 50
 
-        # Die Schleife verarbeitet nun alle 8 Elemente aus Teil 1
-        for idx, (key, text_key, color, callback, fg, icon, tt_de, tt_en) in enumerate(
-            button_defs
-        ):
+        for idx, (key, text_key, color, callback, fg, icon, tt_de, tt_en) in enumerate(button_defs):
 
-            # Sprach-Übersetzung für den Button-Text
             raw_text = (
                 self.get_t(text_key, text_key) if hasattr(self, "get_t") else text_key
             )
-            # --- HIER DEN BUTTON ERSTELLEN UND ZUWEISEN ---
-            from PyQt6.QtWidgets import QPushButton
+
             btn = QPushButton(raw_text)
-            
+
             if key == "fix_perms":
                 self.btn_fix_perms = btn
-            
+
             def create_cb(c, k=key):
                 def wrapper():
-                    # --- 1. SOUND STARTEN ---
                     if "safe_play" in globals():
                         safe_play("service-login.oga")
 
-                    # --- 2. REGENBOGEN-PROGRESS ---
                     pbar = getattr(self, "progress_bar", None)
                     if pbar:
                         rainbow = (
@@ -9147,10 +9334,11 @@ class PatchManagerGUI(QWidget):
                             f"""
                             QProgressBar {{
                                 text-align: center; font-weight: 700; border: 2px solid #222;
-                                border-radius: 6px; background-color: #111; color: black; font-size: 15pt;
+                                border-radius: 6px; background-color: #111; color: black;
+                                font-size: 15pt;
                             }}
                             QProgressBar::chunk {{ background-color: {rainbow}; border-radius: 4px; }}
-                        """
+                            """
                         )
                         msg = "Verarbeite..." if is_de else "Processing..."
                         pbar.setFormat(f"⚙️ {msg} %p%")
@@ -9158,7 +9346,6 @@ class PatchManagerGUI(QWidget):
                         pbar.show()
                         QApplication.processEvents()
 
-                    # --- 3. FUNKTIONS-AUFRUF ---
                     try:
                         if hasattr(c, "__self__") or k == "online_patch_dl":
                             c()
@@ -9176,6 +9363,7 @@ class PatchManagerGUI(QWidget):
 
                         if "safe_play" in globals():
                             safe_play("complete.oga")
+
                         if pbar:
                             pbar.setValue(100)
                             pbar.setFormat("✅ OK!" if is_de else "✅ Done!")
@@ -9192,16 +9380,11 @@ class PatchManagerGUI(QWidget):
                     if pbar:
                         QTimer.singleShot(
                             3000,
-                            (
-                                self.pbar_idle
-                                if hasattr(self, "pbar_idle")
-                                else lambda: pbar.setValue(0)
-                            ),
+                            self.pbar_idle if hasattr(self, "pbar_idle") else lambda: pbar.setValue(0),
                         )
 
                 return wrapper
 
-            # --- Button erstellen ---
             btn = self.create_action_button(
                 parent=self,
                 text=raw_text,
@@ -9214,25 +9397,25 @@ class PatchManagerGUI(QWidget):
                 radius=getattr(self, "BUTTON_RADIUS", 10),
             )
 
-            # --- TOOLTIP SETZEN & STYLEN ---
             btn.setToolTip(tt_de if is_de else tt_en)
-            # Der Tooltip erhält den Rahmen in der Button-Farbe
+
             btn.setStyleSheet(
                 btn.styleSheet()
                 + f"""
                 QToolTip {{
-                    background-color: #2b2b2b; 
-                    color: {color}; 
-                    border: 1px solid {color}; 
-                    border-radius: 5px; 
-                    padding: 8px; 
+                    background-color: #2b2b2b;
+                    color: {color};
+                    border: 1px solid {color};
+                    border-radius: 5px;
+                    padding: 8px;
                     font-size: 10pt;
                 }}
-            """
+                """
             )
 
             btn.setSizePolicy(
-                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.MinimumExpanding,
             )
             btn.setMinimumHeight(FLACH_HEIGHT)
             btn.setMaximumHeight(FLACH_HEIGHT)
@@ -9240,6 +9423,7 @@ class PatchManagerGUI(QWidget):
 
             row, col = divmod(idx, cols_per_row)
             options_grid.addWidget(btn, row, col)
+
             self.option_buttons[key] = (btn, text_key)
 
         for i in range(cols_per_row):
@@ -9947,7 +10131,7 @@ class PatchManagerGUI(QWidget):
             """
             )
 
-        # --- 3. UI Aktualisierung starten ---
+                # --- 3. UI Aktualisierung starten ---
         if pbar:
             pbar.setValue(20)
             pbar.show()
@@ -9962,9 +10146,13 @@ class PatchManagerGUI(QWidget):
             if lbl:
                 lbl.setText(de_t if is_de else en_t)
 
-        # --- 4. S3 & NCam ---
+        # --- 4. S3, S4 & NCam ---
         apply_s3_btn_logic(
             getattr(self, "btn_s3", None), getattr(self, "S3_PATH", "/opt/s3"), "S3"
+        )
+        # HIER ERGÄNZT: SimpleBuild 4 Logik-Anwendung
+        apply_s3_btn_logic(
+            getattr(self, "btn_s4", None), getattr(self, "S4_PATH", "/opt/s4"), "S4"
         )
         apply_s3_btn_logic(
             getattr(self, "btn_ncam", None),
@@ -9975,55 +10163,54 @@ class PatchManagerGUI(QWidget):
         # --- 5. Andere Buttons mit Tooltips ---
         mapping = [
             (
-                self.btn_open_work,
+                getattr(self, "btn_open_work", None),
                 "Arbeitsordner",
                 "WORK_DIR",
                 QStyle.StandardPixmap.SP_DirIcon,
                 "Öffnet den lokalen Patch-Ordner",
             ),
             (
-                self.btn_open_temp,
+                getattr(self, "btn_open_temp", None),
                 "Temp-Repo",
                 "Temp-Repo",
                 QStyle.StandardPixmap.SP_DirIcon,
                 "Zeigt den lokalen Git-Clone",
             ),
             (
-                self.btn_open_emu,
+                getattr(self, "btn_open_emu", None),
                 "Emu-Git",
                 "Emu-Git",
                 QStyle.StandardPixmap.SP_DirIcon,
                 "Öffnet das Repo im Browser",
             ),
             (
-                self.btn_check_tools,
+                getattr(self, "btn_check_tools", None),
                 "Tools prüfen",
                 "Check Tools",
                 QStyle.StandardPixmap.SP_ComputerIcon,
                 "Prüft Compiler & Abhängigkeiten",
             ),
             (
-                self.btn_modifier,
+                getattr(self, "btn_modifier", None),
                 "Patch Autor",
                 "Patch Author",
                 QStyle.StandardPixmap.SP_FileDialogDetailedView,
                 "Ändert den Namen des Patch-Autors",
             ),
             (
-                self.btn_repo_url,
+                getattr(self, "btn_repo_url", None),
                 "Repo URL",
                 "Repo URL",
                 QStyle.StandardPixmap.SP_DriveNetIcon,
                 "Ändert die Git-Repository URL",
             ),
             (
-                self.btn_check_commit,
+                getattr(self, "btn_check_commit", None),
                 "Commit Check",
                 "Check Commit",
                 QStyle.StandardPixmap.SP_BrowserReload,
                 "Prüft online auf Updates",
             ),
-            
             (
                 getattr(self, "btn_fix_perms", None),
                 "Rechte fixen",
@@ -10033,8 +10220,8 @@ class PatchManagerGUI(QWidget):
             ),
         ]
         for btn, de, en, icon, tt in mapping:
-            apply_final_style(btn, de if is_de else en, icon)
-            if btn:
+            if btn:  # Sicherheits-Check hinzugefügt
+                apply_final_style(btn, de if is_de else en, icon)
                 btn.setToolTip(tt)
 
         # --- 6. Grid Buttons ---
@@ -10051,8 +10238,10 @@ class PatchManagerGUI(QWidget):
                 "exit": QStyle.StandardPixmap.SP_DialogCloseButton,
             }
             for key, btn in self.buttons.items():
-                if key in grid_icons:
-                    apply_final_style(btn, self.get_t(key, key), grid_icons[key])
+                if key in grid_icons and btn:  # Sicherheits-Check hinzugefügt
+                    func_get_t = getattr(self, "get_t", lambda k, d: d)
+                    apply_final_style(btn, func_get_t(key, key), grid_icons[key])
+
         # --- 6.5 Matrix Button ---
         if hasattr(self, "btn_matrix") and self.btn_matrix:
             txt = "🔙 MATRIX VERLASSEN" if is_de else "🔙 EXIT MATRIX"
@@ -10061,25 +10250,31 @@ class PatchManagerGUI(QWidget):
             self.btn_matrix.setStyleSheet(
                 """
                 QPushButton {
-                    text-align:left;
-                   padding-left:8px;
-                    font-weight:bold;
-                    color:#00FFFF;
-                    background-color:#3d3d3d;
-                    border:1px solid #00FFFF;
-                    border-radius:8px;
+                    text-align: left;
+                    padding-left: 8px;
+                    font-weight: bold;
+                    color: #00FFFF;
+                    background-color: #3d3d3d;
+                    border: 1px solid #00FFFF;
+                    border-radius: 8px;
                 }
                 QPushButton:hover {
-                    background-color:#00FFFF;
-                    color:black;
+                    background-color: #00FFFF;
+                    color: black;
                 }
                 """
             )
+
         # --- 7. Abschluss ---
         if pbar:
             pbar.setValue(100)
-            QTimer.singleShot(2000, self.pbar_idle)
+            if hasattr(self, "pbar_idle"):
+                QTimer.singleShot(2000, self.pbar_idle)
+            else:
+                QTimer.singleShot(2000, lambda: pbar.hide())
+                
         QApplication.processEvents()
+
 
     def edit_patch_header(self, info_widget=None, progress_callback=None):
         """Öffnet den Header-Editor mit Neon-Regenbogen-Progress, Sound und Sprach-Support."""
@@ -11603,16 +11798,16 @@ class PatchManagerGUI(QWidget):
         self.btn_s4.setStyleSheet(
             """
             QPushButton { 
-                color: #2ecc71; background-color: #3d3d3d; 
+                color: orange; background-color: #3d3d3d; 
                 border: 1px solid #555; border-radius: 8px; 
             }
-            QPushButton:hover { background-color: #2ecc71; color: black; }
+            QPushButton:hover { background-color: orange; color: black; }
             """
         )
 
         # --- Der NCam-Button ---
         self.btn_ncam = QPushButton("🚀 Install NCam-speedy")
-        self.btn_ncam.setFixedSize(180, self.UI_BUTTON_H)
+        self.btn_ncam.setFixedSize(190, self.UI_BUTTON_H)
         self.btn_ncam.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_ncam.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self.btn_ncam.setStyleSheet(
@@ -13394,7 +13589,7 @@ class PatchManagerGUI(QWidget):
             get_t("github_config_header", "GitHub Konfiguration"),
         )
 
-        # --- C) DIE 3 NEUEN ORDNER-BUTTONS ---
+        # --- C) DIE 3 NEUEN ORDNER-BUTTONS & INSTALLATIONS-BUTTONS ---
         safe_ui(
             "btn_open_work",
             "setText",
@@ -13404,6 +13599,23 @@ class PatchManagerGUI(QWidget):
             "btn_open_temp", "setText", " Temp-Repo" if lang == "de" else " Temp Repo"
         )
         safe_ui("btn_open_emu", "setText", " Emu Git" if lang == "de" else " Emu Git")
+
+        # HIER ERGÄNZT: Die Übersetzungen für S3, S4 und NCam
+        safe_ui(
+            "btn_s3", 
+            "setText", 
+            get_t("install_s3", "🚀 S3 Installieren" if lang == "de" else "🚀 Install S3")
+        )
+        safe_ui(
+            "btn_s4", 
+            "setText", 
+            get_t("install_s4", "🚀 S4 Installieren" if lang == "de" else "🚀 Install S4")
+        )
+        safe_ui(
+            "btn_ncam", 
+            "setText", 
+            get_t("install_ncam", "🚀 NCam Installieren" if lang == "de" else "🚀 Install NCam-speedy")
+        )
 
         # --- D) FUNKTIONS-BUTTONS ---
         safe_ui(
@@ -14994,7 +15206,7 @@ if __name__ == "__main__":
     from PyQt6.QtCore import Qt, QTimer, QLibraryInfo
     from PyQt6.QtWidgets import QApplication, QMessageBox
 
-    # ---------------- 0. ADMIN / ROOT ELEVATION (VM & WINDOWS FIX) ----------------
+        # ---------------- 0. ADMIN / ROOT ELEVATION (VM & WINDOWS FIX) ----------------
     def elevate_privileges():
         """Prüft auf Admin/Root und fordert diese grafisch an, falls nötig."""
         # Verhindert Endlosschleife, falls Elevation fehlschlägt
@@ -15013,27 +15225,99 @@ if __name__ == "__main__":
             elif system == "Linux":
                 if os.geteuid() != 0:
                     print("[SYSTEM] Root-Rechte erforderlich für VM-Operationen...")
-                    # Versuche grafischen Passwort-Dialog (pkexec), sonst sudo
+                    
+                    # 1. Ermittle den echten, unprivilegierten Benutzer hinter der aktuellen Session
+                    real_user = os.getenv("USER") or os.getenv("LOGNAME")
+                    if not real_user or real_user == "root":
+                        # Versuche den Besitzer der grafischen X11-Session zu ermitteln
+                        try:
+                            real_user = subprocess.check_output(["id", "-un"], text=True).strip()
+                        except Exception:
+                            real_user = "root"
+                    
+                    # 2. Hole die kritischen Display- und Sitzungsvariablen des aktuellen Users
+                    display = os.getenv("DISPLAY", ":0")
+                    xauth = os.getenv("XAUTHORITY")
+                    xdg_runtime = os.getenv("XDG_RUNTIME_DIR")
+                    wayland_display = os.getenv("WAYLAND_DISPLAY")
+
+                    # Fallback für XAUTHORITY, falls leer
+                    if not xauth and real_user and real_user != "root":
+                        possible_xauth = Path(f"/home/{real_user}/.Xauthority")
+                        if possible_xauth.exists():
+                            xauth = str(possible_xauth)
+
+                    # Fallback für XDG_RUNTIME_DIR (wichtig für Wayland & Qt6)
+                    if not xdg_runtime and real_user and real_user != "root":
+                        try:
+                            import pwd
+                            uid = pwd.getpwnam(real_user).pw_uid
+                            possible_xdg = Path(f"/run/user/{uid}")
+                            if possible_xdg.exists():
+                                xdg_runtime = str(possible_xdg)
+                        except Exception:
+                            pass
+
+                    # 3. X11-Berechtigung für Root freigeben (Erlaubt Root den Zugriff auf das User-Display)
+                    try:
+                        subprocess.run(["xhost", "+SI:localuser:root"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    except Exception:
+                        pass
+
+                    # 4. Elevation-Tool wählen und Umgebungsvariablen über die Shell erzwingen
+                    # Grund: pkexec/sudo löschen os.environ vor dem Start. Wir müssen sie per env mitgeben!
                     launcher = shutil.which("pkexec") or shutil.which("sudo")
                     if launcher:
-                        os.execv(launcher, [launcher, sys.executable] + sys.argv + ["--elevated"])
+                        # Baue die Zuweisungen für die Umgebungsvariablen zusammen
+                        env_args = [f"DISPLAY={display}"]
+                        if xauth:
+                            env_args.append(f"XAUTHORITY={xauth}")
+                        if xdg_runtime:
+                            env_args.append(f"XDG_RUNTIME_DIR={xdg_runtime}")
+                        if wayland_display:
+                            env_args.append(f"WAYLAND_DISPLAY={wayland_display}")
+
+                        # Erstelle das Python-Kommando
+                        python_cmd = [sys.executable] + sys.argv + ["--elevated"]
+
+                        if "sudo" in launcher:
+                            # Bei sudo nutzen wir 'env', um gefilterte Variablen zu erzwingen
+                            os.execv(launcher, [launcher, "env"] + env_args + python_cmd)
+                        else:
+                            # pkexec erlaubt keine direkte Nutzung von env als Argument.
+                            # Wir kapseln den Aufruf in einer Root-Bash, um die Variablen sicher zu injizieren.
+                            bash_script = " ".join(env_args) + " " + " ".join(f'"{a}"' for a in python_cmd)
+                            os.execv(launcher, [launcher, "bash", "-c", bash_script])
+                    
                     sys.exit(1)
         except Exception as e:
             print(f"[!] Elevation-Error: {e}")
+
+
 
     # Rechte prüfen, bevor die GUI geladen wird
     elevate_privileges()
 
     # ---------------- 1. SYSTEM ENV & HIGH-DPI FIX ----------------
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
-    os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
     os.environ["NO_AT_BRIDGE"] = "1"
 
-    if platform.system() == "Linux":
-        os.environ["QT_QPA_PLATFORM"] = "xcb"
-    elif platform.system() == "Windows":
+    system = platform.system()
+    if system == "Linux":
+        # Wenn wir als Root laufen und XDG_RUNTIME_DIR fehlt immer noch, 
+        # schalten wir Wayland ab und zwingen Qt auf X11-Zusammenarbeit (xcb via xhost)
+        if os.geteuid() == 0 and not os.getenv("XDG_RUNTIME_DIR"):
+            os.environ["QT_QPA_PLATFORM"] = "xcb"
+        else:
+            # Standard: Versuche Wayland, nutze xcb als stabilen Fallback
+            os.environ["QT_QPA_PLATFORM"] = "wayland;xcb"
+        
+    elif system == "Windows":
         if hasattr(sys.stdout, "reconfigure"):
             sys.stdout.reconfigure(encoding="utf-8")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8")
+
 
     # ---------------- 2. DPI POLICY & QAPPLICATION START ----------------
     try:
