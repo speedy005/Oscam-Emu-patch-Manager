@@ -10613,8 +10613,20 @@ class PatchManagerGUI(QWidget):
                 QTimer.singleShot(2000, self.pbar_idle)
             else:
                 QTimer.singleShot(2000, lambda: pbar.hide())
-                
+
+        # KORRIGIERT: Nutzt jetzt 'file_cfg' statt 'cfg', um Abstürze zu verhindern
+        theme_mode = str(file_cfg.get("theme_mode", "standard")).lower()
+        theme_color = str(file_cfg.get("color", "Classics")).lower()
+
+        if "matrix" in theme_mode or "matrix" in theme_color:
+            if hasattr(self, "enable_matrix_theme"):
+                self.enable_matrix_theme()
+        else:
+            if hasattr(self, "enable_standard_theme"):
+                self.enable_standard_theme()       
+
         QApplication.processEvents()
+
 
 
     def edit_patch_header(self, info_widget=None, progress_callback=None):
