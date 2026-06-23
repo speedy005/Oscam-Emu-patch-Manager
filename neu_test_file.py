@@ -2324,8 +2324,9 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
         for key in list(cfg_updates.keys()):
             if key in path_keys and isinstance(cfg_updates[key], str):
                 path_val = cfg_updates[key]
+                # FIX: Korrekte Prüfung auf Doppelpunkt bei Windows-Laufwerken unter Linux
                 if not is_win and len(path_val) > 1 and path_val[1] == ":":
-                    path_val = path_val[2:]
+                    path_val = path_val[2:]  # Macht aus C:\opt\s3 -> \opt\s3
                 
                 cfg_updates[key] = os.path.normpath(path_val)
 
@@ -2335,7 +2336,7 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
         # 3. Globale Variablen setzen (mit korrigiertem simplebuild4 Fallback)
         default_s3 = "C:\\s3" if is_win else "/opt/s3"
         default_ncam = "C:\\opt\\ncam" if is_win else "/opt/s3_ncam_bonecrew"
-        default_s4 = "C:\\opt\\simplebuild4" if is_win else "/opt/simplebuild4" # KORRIGIERT
+        default_s4 = "C:\\opt\\simplebuild4" if is_win else "/opt/simplebuild4"
 
         globals()["S3_PATH"] = current_cfg.get("s3_custom_path", default_s3)
         globals()["NCAM_PATH"] = current_cfg.get("ncam_custom_path", default_ncam)
@@ -2345,8 +2346,7 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
 
         # 4. System-Werte & Pfad-Synchronisation
         if gui_instance:
-            # FIX: Wir laden die Pfade IMMER frisch aus der Gesamt-Config für das GUI-Objekt.
-            # Das verhindert das Einfrieren oder fälschliche Überschneiden im RAM.
+            # Wir laden die Pfade IMMER frisch aus der Gesamt-Config für das GUI-Objekt.
             gui_instance.S3_PATH = current_cfg.get("s3_custom_path", default_s3)
             gui_instance.NCAM_PATH = current_cfg.get("ncam_custom_path", default_ncam)
             gui_instance.S4_PATH = current_cfg.get("s4_custom_path", default_s4)
@@ -2442,14 +2442,17 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
 
 
 
+
+
 # ===================== CONFIG =====================
 def load_config(gui_instance=None):
     """
     Lädt die Config, korrigiert Pfade für Windows/Linux, ergänzt fehlende Keys
     und synchronisiert die GUI. Optimiert für Oracle VM, Linux & Windows.
-    FIX: Synchronisiert den Fallback-Pfad für SimpleBuild 4 exakt auf 'simplebuild4'.
+    FIX: Korrigiert die Linux-Laufwerksbereinigung und erzwingt ein stabiles UI-Refresh.
     """
     import os, json, platform
+    from PyQt6.QtCore import QTimer
 
     is_win = platform.system() == "Windows"
     CORRECT_URL = "https://github.com/oscam-mirror/oscam-emu.git"
@@ -2462,7 +2465,7 @@ def load_config(gui_instance=None):
     # --- Dynamische Standard-Pfade je nach OS ---
     default_s3 = "C:\\s3" if is_win else "/opt/s3"
     default_ncam = "C:\\opt\\ncam" if is_win else "/opt/s3_ncam_bonecrew"
-    default_s4 = "C:\\opt\\simplebuild4" if is_win else "/opt/simplebuild4" # KORRIGIERT!
+    default_s4 = "C:\\opt\\simplebuild4" if is_win else "/opt/simplebuild4"
 
     default_cfg = {
         "commit_count": 5,
@@ -2471,7 +2474,7 @@ def load_config(gui_instance=None):
         "s3_patch_path": os.path.normpath(base_patch_dir),
         "s3_custom_path": default_s3,
         "ncam_custom_path": default_ncam,
-        "s4_custom_path": default_s4, # Nutzt jetzt standardmäßig simplebuild4
+        "s4_custom_path": default_s4,
         "patch_modifier": "speedy005",
         "EMUREPO": CORRECT_URL,
         "theme_mode": "standard",
@@ -2509,7 +2512,7 @@ def load_config(gui_instance=None):
             if key in path_keys and isinstance(cfg[key], str):
                 old_path = cfg[key]
                 
-                # FIX: Korrekte Prüfung auf Windows-Laufwerke (z.B. C:) unter Linux
+                # FIX: Korrekte Prüfung auf Windows-Laufwerke (z.B. C:) unter Linux/VMs
                 if not is_win and len(old_path) > 1 and old_path[1] == ":":
                     old_path = old_path[2:]
                 
@@ -2552,7 +2555,7 @@ def load_config(gui_instance=None):
                 for btn in gui_instance.all_buttons:
                     btn.setFixedHeight(button_height)
 
-            # --- THEME FIX: Dynamische Prüfung von 'color' und 'theme_mode' ---
+            # --- THEME FIX ---
             theme_color = str(cfg.get("color", "Classics")).lower()
             theme_mode = str(cfg.get("theme_mode", "standard")).lower()
 
@@ -2580,11 +2583,17 @@ def load_config(gui_instance=None):
                     if hasattr(gui_instance, "force_user_leds_static"):
                         gui_instance.force_user_leds_static()
 
+            # FIX: Zwingt die GUI, nach dem vollständigen Laden der App-Events
+            # die Buttons zu prüfen. Das verhindert das "Verschwinden" der grünen Stati!
+            if hasattr(gui_instance, "update_ui_texts"):
+                QTimer.singleShot(0, gui_instance.update_ui_texts)
+
         return cfg
 
     except Exception as e:
         print(f"⚠️ Kritischer Config Fehler: {e}")
         return default_cfg.copy()
+
 
 
 
@@ -10448,29 +10457,28 @@ class PatchManagerGUI(QWidget):
             if lbl:
                 lbl.setText(de_t if is_de else en_t)
 
-        # --- 4. S3, S4 & NCam ---
+        # --- 4. S3, S4 & NCam (Autarke Fallback-Sicherung direkt aus Config) ---
         is_win = platform.system() == "Windows"
         
-        # S3 Button
-        apply_s3_btn_logic(
-            getattr(self, "btn_s3", None), 
-            getattr(self, "S3_PATH", "C:\\s3" if is_win else "/opt/s3"), 
-            "S3"
-        )
-        
-        # S4 Button KORRIGIERT: Fallback angepasst auf 'simplebuild4', um Fehltreffer zu vermeiden
-        apply_s3_btn_logic(
-            getattr(self, "btn_s4", None), 
-            getattr(self, "S4_PATH", "C:\\opt\\simplebuild4" if is_win else "/opt/simplebuild4"), 
-            "S4"
-        )
-        
-        # NCam Button KORRIGIERT: Fallback angepasst an load_config Standard
-        apply_s3_btn_logic(
-            getattr(self, "btn_ncam", None),
-            getattr(self, "NCAM_PATH", "C:\\opt\\ncam" if is_win else "/opt/s3_ncam_bonecrew"),
-            "NCam"
-        )
+        cfg = getattr(self, "current_config", {})
+        if not isinstance(cfg, dict):
+            cfg = {}
+
+        # Live-Auslesen erzwingen, falls RAM-Variablen beim Start überschrieben wurden
+        s3_path = cfg.get("s3_custom_path", getattr(self, "S3_PATH", "C:\\s3" if is_win else "/opt/s3"))
+        s4_path = cfg.get("s4_custom_path", getattr(self, "S4_PATH", "C:\\opt\\simplebuild4" if is_win else "/opt/simplebuild4"))
+        ncam_path = cfg.get("ncam_custom_path", getattr(self, "NCAM_PATH", "C:\\opt\\ncam" if is_win else "/opt/s3_ncam_bonecrew"))
+
+        # Instanzvariablen im RAM synchron halten
+        self.S3_PATH = s3_path
+        self.S4_PATH = s4_path
+        self.NCAM_PATH = ncam_path
+
+        # Buttons mit den validierten Pfaden prüfen und färben
+        apply_s3_btn_logic(getattr(self, "btn_s3", None), s3_path, "S3")
+        apply_s3_btn_logic(getattr(self, "btn_s4", None), s4_path, "S4")
+        apply_s3_btn_logic(getattr(self, "btn_ncam", None), ncam_path, "NCam")
+
 
         # --- 5. Andere Buttons mit Tooltips ---
         mapping = [
@@ -15423,7 +15431,6 @@ class PatchManagerGUI(QWidget):
 
         # 3. GUI mit Fallback-Texten aufbauen
         msg = QMessageBox(self)
-        # Fallbacks hinter dem Komma jetzt auf Englisch
         msg.setWindowTitle(t.get("exit", "Exit"))
         msg.setText(t.get("exit_question", "Do you really want to exit?"))
 
@@ -15439,13 +15446,28 @@ class PatchManagerGUI(QWidget):
 
         if msg.clickedButton() == yes_button:
             # 4. Config speichern und beenden
-            if hasattr(self, "cfg"):
-                try:
-                    # Nutzt die globale save_config Funktion
-                    if "save_config" in globals():
-                        save_config(self.cfg)
-                except Exception as e:
-                    print(f"[WARN] Config save failed: {e}")
+            # FIX: Wir lesen die Pfade direkt live aus den GUI-Variablen aus!
+            exit_updates = {
+                "s3_custom_path": getattr(self, "S3_PATH", "C:\\s3"),
+                "ncam_custom_path": getattr(self, "NCAM_PATH", "C:\\opt\\ncam"),
+                "s4_custom_path": getattr(self, "S4_PATH", "C:\\opt\\simplebuild4"),
+                "last_session_exit": "success"
+            }
+            
+            # Nimm restliche Einstellungen aus self.cfg oder current_config mit auf, falls vorhanden
+            old_cfg = getattr(self, "cfg", getattr(self, "current_config", {}))
+            if isinstance(old_cfg, dict):
+                for key in ["color", "language", "commit_count", "theme_mode", "blink_speed", "led_enabled", "EMUREPO", "patch_modifier", "s3_patch_path"]:
+                    if key in old_cfg:
+                        exit_updates[key] = old_cfg[key]
+
+            try:
+                if "save_config" in globals():
+                    self.is_closing = True
+                    # gui_instance=self stellt sicher, dass die Werte synchronisiert werden
+                    save_config(exit_updates, gui_instance=self, silent=True)
+            except Exception as e:
+                print(f"[WARN] Config save failed: {e}")
 
             QApplication.quit()
 
@@ -15466,47 +15488,48 @@ class PatchManagerGUI(QWidget):
             self.is_closing = True
 
             # 2. Letztes Speichern triggern
-            # Dies zeigt jetzt die goldene Nachricht im Log & den orangefarbenen Balken
-            save_config({"last_session_exit": "success"}, gui_instance=self)
+            # FIX: Auch hier sichern wir die Pfade explizit ab, damit der Timer-Event 
+            # oder das Schließen per X-Button oben rechts nichts zerstört!
+            exit_updates = {
+                "s3_custom_path": getattr(self, "S3_PATH", "C:\\s3"),
+                "ncam_custom_path": getattr(self, "NCAM_PATH", "C:\\opt\\ncam"),
+                "s4_custom_path": getattr(self, "S4_PATH", "C:\\opt\\simplebuild4"),
+                "last_session_exit": "success"
+            }
+            
+            old_cfg = getattr(self, "cfg", getattr(self, "current_config", {}))
+            if isinstance(old_cfg, dict):
+                for key in ["color", "language", "commit_count", "theme_mode", "blink_speed", "led_enabled", "EMUREPO", "patch_modifier", "s3_patch_path"]:
+                    if key in old_cfg:
+                        exit_updates[key] = old_cfg[key]
+
+            save_config(exit_updates, gui_instance=self)
 
             # 3. Sound-Logik (Windows / Linux)
             import platform
 
             if platform.system() == "Windows":
                 import winsound
-
                 winsound.MessageBeep(winsound.MB_ICONASTERISK)
             else:
                 import shutil, subprocess
 
                 for cmd in ["paplay", "canberra-gtk-play", "aplay"]:
                     if shutil.which(cmd):
-                        sound_path = (
-                            "/usr/share/sounds/freedesktop/stereo/service-logout.oga"
-                        )
+                        sound_path = "/usr/share/sounds/freedesktop/stereo/service-logout.oga"
                         subprocess.Popen([cmd, sound_path], stderr=subprocess.DEVNULL)
                         break
 
-            # 4. Kurze Verzögerung (700ms), damit der User die Meldung noch sieht
-            # Wir ignorieren das Event zuerst und schließen dann per QTimer
+            # 4. Kurze Verzögerung (1000ms), damit der User die Meldung noch sieht
             from PyQt6.QtCore import QTimer
 
             event.ignore()  # Fenster bleibt noch kurz offen
-            QTimer.singleShot(
-                1000, self.close_final
-            )  # Ruft nach 700ms das endgültige Schließen auf
+            QTimer.singleShot(1000, self.close_final)
 
         except Exception as e:
-            # Falls etwas schiefgeht, Fenster sofort schließen
             print(f"Fehler im closeEvent: {e}")
             event.accept()
 
-    def close_final(self):
-        """Hilfsfunktion für das endgültige Beenden nach der Verzögerung."""
-        import sys
-
-        # Beendet das komplette Programm sauber
-        sys.exit(0)
 
 auto_install_emoji_font()
 # =============================================================================
