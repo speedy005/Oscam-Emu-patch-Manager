@@ -1,11 +1,11 @@
 # Änderungen für oscam_patch_manager.py
-Letzte Aktualisierung: 23.06.2026 14:29
+Letzte Aktualisierung: 23.06.2026 14:30
 
 ---
 
 ## 🔧 Änderungen am Script
 
-* Refactor sound playback logic and update version (6a3e67e)
+
 ---
 
 ## 📊 Aktueller Tool-Status
