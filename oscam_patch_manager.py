@@ -789,7 +789,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "5.4.0"
+APP_VERSION = "5.5.0"
 
 
 # ===================== PATCH DIRS =====================
@@ -4267,8 +4267,8 @@ class CinematicMatrixSplash(QWidget):
             r" █ |_______||_______||__| |__||_______||_|   |_|            █ ",
             r" █                                                          █ ",
             r" █─────────── [ SYSTEM: NEURAL_LINK OPERATIONAL ] ──────────█ ",
-            r" █            >> OSCAM EMU PATCH MANAGER v5.2.0 <<            █ ",
-            r" █            >> CODENAME: SPEEDY_LEGACY   <<            █ ",
+            r" █            >> OSCAM EMU PATCH MANAGER v5.4.0 <<            █ ",
+            r" █            >> CODENAME: SPEEDY_Oscam-_Patch_Manager   <<            █ ",
             r" ◥◣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◢◤ "
         ]
 
@@ -4436,17 +4436,55 @@ class CinematicMatrixSplash(QWidget):
 
 
     def play_sys_sound(self, trigger):
-        """Plattformunabhängige Sounds ohne externe Dateien."""
+        """Cinematic cross-platform sound engine (no external files except system fallback)."""
+
         def run():
             try:
-                if self.os_type == "Windows":
-                    if trigger == "glitch": winsound.Beep(random.randint(1200, 2500), 15)
-                    elif trigger == "start": winsound.Beep(600, 80); winsound.Beep(1200, 100)
-                    elif trigger == "end": winsound.MessageBeep(winsound.MB_OK)
-                else: # Linux
-                    if trigger == "glitch": print('\a', end='', flush=True)
-                    elif trigger == "end": subprocess.run(["paplay", "/usr/share/sounds/freedesktop/stereo/complete.oga"], stderr=subprocess.DEVNULL)
-            except: pass
+                system = self.os_type
+
+                # ---------------- WINDOWS ----------------
+                if system == "Windows":
+                    if trigger == "glitch":
+                        winsound.Beep(random.randint(900, 2500), 18)
+
+                    elif trigger == "start":
+                        winsound.Beep(500, 90)
+                        winsound.Beep(900, 110)
+  
+                    elif trigger == "end":
+                        winsound.MessageBeep(winsound.MB_OK)
+
+                    elif trigger == "boot":
+                        winsound.Beep(300, 120)
+                        winsound.Beep(700, 120)
+                        winsound.Beep(1200, 150)
+
+                # ---------------- LINUX ----------------
+                elif system == "Linux":
+                    if trigger == "glitch":
+                        print("\a", end="", flush=True)
+
+                    elif trigger in ("end", "boot"):
+                        subprocess.run(
+                            ["paplay", "/usr/share/sounds/freedesktop/stereo/complete.oga"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL
+                        )
+
+                # ---------------- macOS ----------------
+                elif system == "Darwin":
+                    if trigger == "glitch":
+                        print("\a", end="", flush=True)
+
+                    elif trigger in ("end", "boot"):
+                        subprocess.run(["afplay", "/System/Library/Sounds/Glass.aiff"],
+                                       stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL)
+
+            except Exception:
+                # bewusst silent für splash (kein crash durch sound)
+                pass
+
         threading.Thread(target=run, daemon=True).start()
 
     def paintEvent(self, event):
@@ -15865,4 +15903,3 @@ if __name__ == "__main__":
     except Exception:
         traceback.print_exc()
         sys.exit(1)
-
