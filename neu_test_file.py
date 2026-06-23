@@ -6036,15 +6036,18 @@ class PatchManagerGUI(QWidget):
 
         # 1. Basis-Pfad holen (Fallback auf deinen neuen Ordnernamen 'simplebuild4')
         default_start = "C:\\opt\\simplebuild4" if is_win else "/opt/simplebuild4"
-        s4_path = getattr(self, "S4_PATH", default_start)
+        
+        # FIX: Wir entfernen sofort alle Anführungszeichen aus der geladenen Pfad-Variable,
+        # damit die anschließende '.endswith()'-Prüfung nicht manipuliert wird!
+        s4_path_raw = getattr(self, "S4_PATH", default_start)
+        s4_path = str(s4_path_raw).replace('"', '').strip()
         sub_folder = "simplebuild4"
 
-        # GEÄNDERT: S4 nutzt im Streamboard-Git die Namen 'simplebuild' oder 'simplebuild.exe'
+        # S4 nutzt im Streamboard-Git die Namen 'simplebuild' oder 'simplebuild.exe'
         possible_names = ["simplebuild", "simplebuild.exe", "s4", "s4.exe"]
         possible_paths = []
 
         # Suchliste dynamisch und plattformkonform aufbauen
-        # Priorität 1: Direkt im gewählten S4_PATH oder dessen Unterordner
         for name in possible_names:
             possible_paths.append(os.path.join(s4_path, name))
             possible_paths.append(os.path.join(s4_path, sub_folder, name))
@@ -6074,6 +6077,9 @@ class PatchManagerGUI(QWidget):
                     # Falls die Datei im Unterordner lag, korrigieren wir die Variable im Speicher direkt mit
                     if sub_folder in path.lower() and not s4_path.lower().endswith(sub_folder.lower()):
                         self.S4_PATH = os.path.normpath(os.path.join(s4_path, sub_folder))
+                        # Direkt permanent in der config.json absichern
+                        if "save_config" in globals():
+                            save_config({"s4_custom_path": self.S4_PATH}, gui_instance=self, silent=True)
                     break
 
         # 3. Ausführung oder Fehlermeldung
@@ -6100,6 +6106,7 @@ class PatchManagerGUI(QWidget):
 
             # Fallback: Nur leeres Terminal öffnen
             self.open_terminal()
+
 
     
     def start_ncam_menu(self):
@@ -8790,18 +8797,24 @@ class PatchManagerGUI(QWidget):
         from PyQt6.QtWidgets import QApplication
         from PyQt6.QtCore import QTimer
 
-        # 1. SETUP & PARAMETER
-        s3_path = kwargs.get("s3_path")
+        # 1. PARAMETER RAUSHOLEN & SOFORT RADIKAL BEREINIGEN
+        s3_path_raw = kwargs.get("s3_path")
         use_sudo = kwargs.get("use_sudo", False)
         lang = str(getattr(self, "LANG", "de")).lower()[:2]
         is_de = lang == "de"
         pbar = getattr(self, "progress_bar", None)
 
-        # GEÄNDERT: Erweiterte Erkennung für S3, S4 und NCam
+        # FIX: Alle eventuell mitgelieferten Anführungszeichen sofort entfernen,
+        # bevor irgendeine Pfadfunktion (dirname/basename) darauf zugreift!
+        s3_path = None
+        if s3_path_raw:
+            s3_path = str(s3_path_raw).replace('"', '').strip()
+
+        # Erweiterte Erkennung für S3, S4 und NCam
         s3_path_lower = s3_path.lower() if s3_path else ""
         if "ncam" in s3_path_lower:
             proj_name = "NCam"
-        elif "s4" in s3_path_lower or "simplebuild4" in s3_path_lower:
+        elif "s4" in s3_path_lower or "simplebuild" in s3_path_lower:
             proj_name = "S4"
         else:
             proj_name = "S3"
@@ -8836,41 +8849,68 @@ class PatchManagerGUI(QWidget):
             system = platform.system()
             terminal_opened = False
             exec_cmd = ""
+            is_s4_script = proj_name == "S4"
 
             if s3_path:
                 s3_dir = os.path.dirname(s3_path)
-                # GEÄNDERT: Holt den echten Dateinamen (z.B. s3, s4 oder simplebuild) dynamisch heraus
                 exe_name = os.path.basename(s3_path)
                 
                 s3_cmd = f"./{exe_name} menu"
                 if use_sudo and system == "Linux":
                     s3_cmd = f"sudo ./{exe_name} menu"
                 
-                # cd in den Ordner (plattformkonforme Anführungszeichen für Pfade mit Leerzeichen)
                 if system == "Windows":
-                    # Windows Git-Bash / MinGW bevorzugt doppelte Anführungszeichen
-                    exec_cmd = f'cd "{s3_dir}" && bash {exe_name} menu'
+                    s3_dir_win = os.path.normpath(s3_dir)
+                    if is_s4_script:
+                        exec_cmd = f'cd /d "{s3_dir_win}" && python "{exe_name}" menu'
+                    else:
+                        s3_dir_bash = s3_dir_win.replace("\\", "/")
+                        exec_cmd = f'cd "{s3_dir_bash}" && bash "{exe_name}" menu'
                 else:
                     exec_cmd = f"cd '{s3_dir}' && {s3_cmd}"
 
-            # 4. BETRIEBSSYSTEM LOGIK
+            # --- 4. BETRIEBSSYSTEM LOGIK ---
             if system == "Windows":
-                # GEÄNDERT: Git-Bash Pfad ermitteln, falls installiert (Zwingend nötig für sh/bash Skripte)
                 git_bash = shutil.which("bash") or os.path.expandvars("%ProgramFiles%\\Git\\bin\\bash.exe")
+        
+                if s3_path:
+                    # 1. Wir entfernen radikal alle reingeschriebenen Anführungszeichen aus dem String
+                    s3_path_clean = str(s3_path).replace('"', '').strip()
                 
-                if exec_cmd:
-                    if os.path.exists(git_bash):
-                        # Startet direkt in der echten Git-Bash (Diskretes, sauberes Fenster)
-                        cmd_args = [git_bash, "--login", "-i", "-c", f"{exec_cmd.replace('\\', '/')}; exec bash"]
-                    else:
-                        # Fallback auf CMD, ruft dort aber die systemweite bash auf
-                        win_cmd = exec_cmd.replace("/", "\\")
-                        cmd_args = ["cmd", "/K", win_cmd]
-                else:
-                    cmd_args = ["cmd"]
+                    # 2. Falls der Pfad in der config.json bereits verdoppelt wurde, reparieren wir ihn live im RAM
+                    if s3_path_clean.count(":") > 1:
+                        s3_path_clean = s3_path_clean.split(":")[-1]
+                        if not s3_path_clean.startswith("\\") and len(s3_path_clean) > 0:
+                            drive = str(s3_path).split(":")[0] if ":" in str(s3_path) else "C"
+                            s3_path_clean = f"{drive}:{s3_path_clean}"
+                
+                    s3_path_win = os.path.normpath(s3_path_clean)
+                    s3_dir_win = os.path.dirname(s3_path_win)
+                    exe_name = os.path.basename(s3_path_win)
 
-                subprocess.Popen(cmd_args, creationflags=subprocess.CREATE_NEW_CONSOLE)
-                terminal_opened = True
+                    if is_s4_script:
+                        # REVOLUTIONÄRER FIX: Da 'cwd=s3_dir_win' gesetzt ist, steht CMD bereits im richtigen Ordner!
+                        # Wir übergeben Python KEINEN langen Pfad mehr. Wir rufen nur noch die Datei direkt auf.
+                        # Das tötet jede Pfad-Verschachtelung und jeden [Errno 22] endgültig!
+                        cmd_args = ["cmd", "/K", f"python {exe_name} menu"]
+                        subprocess.Popen(cmd_args, creationflags=subprocess.CREATE_NEW_CONSOLE, cwd=s3_dir_win)
+                        terminal_opened = True
+                    else:
+                        # S3 & NCam laufen stabil in der echten Git-Bash (Verarbeitet Vorwärts-Slashes)
+                        if os.path.exists(git_bash) and exec_cmd:
+                            exec_cmd_clean = exec_cmd.replace('"', '')
+                            cmd_args = [git_bash, "--login", "-i", "-c", f"{exec_cmd_clean.replace('\\', '/')}; exec bash"]
+                            subprocess.Popen(cmd_args, creationflags=subprocess.CREATE_NEW_CONSOLE)
+                            terminal_opened = True
+                        elif exec_cmd:
+                            win_cmd = exec_cmd.replace("/", "\\").replace('"', '')
+                            cmd_args = ["cmd", "/K", win_cmd]
+                            subprocess.Popen(cmd_args, creationflags=subprocess.CREATE_NEW_CONSOLE)
+                            terminal_opened = True
+                else:
+                    # Fallback: Einfach nur leeres Terminal öffnen, falls kein Pfad da ist
+                    subprocess.Popen(["cmd"], creationflags=subprocess.CREATE_NEW_CONSOLE)
+                    terminal_opened = True
 
             elif system == "Linux":
                 terminals = [
@@ -8930,6 +8970,9 @@ class PatchManagerGUI(QWidget):
                     else lambda: pbar.setValue(0)
                 ),
             )
+
+
+
 
 
     def select_patch_path(self):
