@@ -1,17 +1,17 @@
 # Änderungen für oscam_patch_manager.py
-Letzte Aktualisierung: 23.06.2026 11:05
+Letzte Aktualisierung: 23.06.2026 14:29
 
 ---
 
 ## 🔧 Änderungen am Script
 
-
+* Refactor sound playback logic and update version (6a3e67e)
 ---
 
 ## 📊 Aktueller Tool-Status
 
 ```text
-  File "/home/runner/work/Oscam-Emu-patch-Manager/Oscam-Emu-patch-Manager/oscam_patch_manager.py", line 8895
+  File "/home/runner/work/Oscam-Emu-patch-Manager/Oscam-Emu-patch-Manager/oscam_patch_manager.py", line 8920
     cmd_args = [git_bash, "--login", "-i", "-c", f"{exec_cmd_clean.replace('\\', '/')}; exec bash"]
                                                                                                   ^
 SyntaxError: f-string expression part cannot include a backslash
