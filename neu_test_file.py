@@ -481,77 +481,147 @@ def safe_play(sound_name):
     QApplication.beep()
 
 
+import os
+import shutil
+import platform
+import subprocess
+import tempfile
 from PyQt6.QtCore import QThread, pyqtSignal
-from PyQt6.QtWidgets import QFileDialog, QMessageBox, QApplication
-import os, platform, shutil, subprocess, tempfile
-import os, shutil, platform, subprocess, tempfile, re
-from PyQt6.QtCore import QThread, pyqtSignal
-import os, shutil, platform, subprocess, tempfile, re
 
 class S3InstallWorker(QThread):
     finished_signal = pyqtSignal(bool, str)
 
     def __init__(self, base_target_dir):
         super().__init__()
-        # Das ist der vom User gewählte Basis-Pfad (z.B. C:\opt oder /opt)
         self.base_target_dir = os.path.normpath(base_target_dir)
 
     def run(self):
-        import os, shutil, platform, subprocess, tempfile
-
         temp_clone = None
         proj_name = "S3 Standard"
+        sub_folder = "s3"
+        repo_url = "https://github.com/gorgone/s3_releases"
         
         try:
-            # 1. Projekt-Differenzierung & Unterordner festlegen
-            # Wir prüfen anhand des Pfades oder Typs, was installiert werden soll
-            if "ncam" in self.base_target_dir.lower() or "bonecrew" in self.base_target_dir.lower():
-                repo_url = "https://github.com/speedy005/s3_ncam_bonecrew_test"
-                sub_folder = "s3_ncam_bonecrew_test"
-                proj_name = "NCam Bonecrew"
-            else:
-                repo_url = "https://github.com/gorgone/s3_releases"
-                sub_folder = "s3"
-                proj_name = "S3 Standard"
-
-            # Das finale Ziel: Basis-Pfad + Unterordner
             final_destination = os.path.join(self.base_target_dir, sub_folder)
+            temp_clone = tempfile.mkdtemp(prefix="s3_standard_clone_")
 
-            # 2. Temporärer Clone im Benutzer-TEMP
-            temp_clone = tempfile.mkdtemp(prefix="s3_clone_gen_")
-
-            # 3. Git Clone mit --depth 1
+            # 1. Git Clone
             is_win = platform.system() == "Windows"
             subprocess.check_call(
                 ["git", "clone", "--depth", "1", repo_url, temp_clone],
                 shell=is_win
             )
 
-            # 4. FIX FÜR PERMISSION DENIED (Windows):
-            # .git Ordner säubern, damit er beim Kopieren in geschützte Bereiche nicht blockiert
+            # 2. .git Ordner bereinigen (Windows Fix)
             git_dir = os.path.join(temp_clone, ".git")
             if os.path.exists(git_dir):
                 if is_win:
-                    # Schreibschutz rekursiv aufheben
                     subprocess.run(['attrib', '-R', os.path.join(git_dir, '*'), '/S', '/D'], 
                                    shell=True, capture_output=True)
                 shutil.rmtree(git_dir, ignore_errors=True)
 
-            # 5. Ziel-Unterordner erstellen (falls er schon existiert, ist das ok)
+            # 3. Zielordner erstellen und kopieren
             os.makedirs(final_destination, exist_ok=True)
-
-            # 6. Inhalte aus dem Temp-Clone in den UNTERORDNER kopieren
             for item in os.listdir(temp_clone):
                 s = os.path.join(temp_clone, item)
                 d = os.path.join(final_destination, item)
-                
                 if os.path.isdir(s):
-                    # Mergen erlaubt (dirs_exist_ok)
                     shutil.copytree(s, d, dirs_exist_ok=True)
                 else:
                     shutil.copy2(s, d)
 
-            # 7. Linux Rechte im Unterordner setzen
+            # 4. Linux Rechte setzen
+            if platform.system() == "Linux":
+                try:
+                    subprocess.call(["chmod", "-R", "755", final_destination])
+                except:
+                    pass
+
+            self.finished_signal.emit(True, f"{proj_name} erfolgreich in '{sub_folder}' installiert!")
+
+        except Exception as e:
+            error_msg = str(e)
+            if "Permission denied" in error_msg or "[Errno 13]" in error_msg:
+                error_msg += "\n\nTipp: Starten Sie das Programm als Admin oder wählen Sie einen anderen Installationsort."
+            self.finished_signal.emit(False, f"{proj_name} Fehler: {error_msg}")
+
+        finally:
+            if temp_clone and os.path.exists(temp_clone):
+                shutil.rmtree(temp_clone, ignore_errors=True)
+
+import os
+import shutil
+import platform
+import subprocess
+import tempfile
+import time
+from PyQt6.QtCore import QThread, pyqtSignal
+
+class NcamBonecrewInstallWorker(QThread):
+    finished_signal = pyqtSignal(bool, str)
+
+    def __init__(self, base_target_dir):
+        super().__init__()
+        self.base_target_dir = os.path.normpath(base_target_dir)
+
+    def run(self):
+        temp_clone = None
+        proj_name = "NCam Bonecrew"
+        sub_folder = "s3_ncam_bonecrew"
+        repo_url = "https://github.com/speedy005/s3_ncam_bonecrew_test"
+        
+        try:
+            final_destination = os.path.join(self.base_target_dir, sub_folder)
+            temp_clone = tempfile.mkdtemp(prefix="s3_ncam_clone_")
+            
+            time.sleep(0.5)
+            is_win = platform.system() == "Windows"
+            
+            # WINDOWS-FIX: Wir deaktivieren den NTFS-Pfadschutz für diesen Klon-Vorgang.
+            # Dadurch ignoriert Git die Logdateien mit ":" im Namen, anstatt abzubrechen.
+            cmd = [
+                "git", 
+                "-c", "credential.helper=", 
+                "-c", "core.protectNTFS=false", 
+                "clone", 
+                "--depth", "1", 
+                repo_url, 
+                temp_clone
+            ]
+            
+            result = subprocess.run(
+                cmd,
+                shell=is_win,
+                capture_output=True,
+                text=True
+            )
+            
+            # Ein Rückkehrwert von 0 ist Erfolg. Unter Windows kann Git hier 
+            # trotz der Warnung "Clone succeeded" mit Code 128 (oder ungleich 0) abbrechen.
+            # Deshalb prüfen wir, ob die wichtige Hauptdatei 's3' trotzdem erzeugt wurde.
+            if result.returncode != 0 and not os.path.exists(os.path.join(temp_clone, "s3")):
+                git_err = result.stderr.strip() if result.stderr else f"Exit-Code {result.returncode}"
+                raise Exception(f"Git-Fehler: {git_err}")
+
+            # 2. .git Ordner bereinigen (Windows Fix)
+            git_dir = os.path.join(temp_clone, ".git")
+            if os.path.exists(git_dir):
+                if is_win:
+                    subprocess.run(['attrib', '-R', os.path.join(git_dir, '*'), '/S', '/D'], 
+                                   shell=True, capture_output=True)
+                shutil.rmtree(git_dir, ignore_errors=True)
+
+            # 3. Zielordner erstellen und kopieren
+            os.makedirs(final_destination, exist_ok=True)
+            for item in os.listdir(temp_clone):
+                s = os.path.join(temp_clone, item)
+                d = os.path.join(final_destination, item)
+                if os.path.isdir(s):
+                    shutil.copytree(s, d, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(s, d)
+
+            # 4. Linux Rechte setzen
             if platform.system() == "Linux":
                 try:
                     subprocess.call(["chmod", "-R", "755", final_destination])
@@ -565,12 +635,13 @@ class S3InstallWorker(QThread):
             if "Permission denied" in error_msg or "[Errno 13]" in error_msg:
                 error_msg += "\n\nTipp: Starten Sie das Programm als Admin oder wählen Sie einen anderen Installationsort."
             
-            self.finished_signal.emit(False, f"{proj_name} Fehler: {error_msg}")
+            self.finished_signal.emit(False, f"{proj_name} Fehler:\n{error_msg}")
 
         finally:
-            # Sauber aufräumen
             if temp_clone and os.path.exists(temp_clone):
                 shutil.rmtree(temp_clone, ignore_errors=True)
+
+
 
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -2228,7 +2299,7 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
     """
     Speichert Config-Updates und synchronisiert Timer, ProgressBar, Theme sowie S3, S4 & NCam Pfade.
     Pfade werden plattformunabhängig für Windows 11 und Linux normalisiert.
-    FIX: Verhindert das Zurückspringen auf Classics, indem 'color' und 'theme_mode' gleichermaßen geprüft werden.
+    FIX: Verhindert das Vertauschen und ungewollte Grün-Werden falscher Buttons beim S4-Update.
     """
     import os, json, platform
     from PyQt6.QtCore import QTimer
@@ -2241,9 +2312,9 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
         current_cfg = {}
         if os.path.exists(CONFIG_FILE):
             try:
-                with open(CONFIG_FILE, "w" if not os.path.exists(CONFIG_FILE) else "r", encoding="utf-8") as f:
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                     current_cfg = json.load(f)
-            except:
+            except Exception:
                 current_cfg = {}
 
         # --- OS-SCHUTZ: Pfade vor dem Mergen plattformunabhängig säubern ---
@@ -2253,20 +2324,18 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
         for key in list(cfg_updates.keys()):
             if key in path_keys and isinstance(cfg_updates[key], str):
                 path_val = cfg_updates[key]
-                # Fall Linux: Windows-Laufwerksbuchstaben wie C:\ entfernen
                 if not is_win and len(path_val) > 1 and path_val[1] == ":":
-                    path_val = path_val[2:]  # Macht aus C:\opt\s3 -> \opt\s3
+                    path_val = path_val[2:]
                 
-                # Slashes/Backslashes für das aktuelle OS korrigieren
                 cfg_updates[key] = os.path.normpath(path_val)
 
         # 2. Mergen der neuen Updates
         current_cfg.update(cfg_updates)
 
-        # 3. Globale Variablen setzen (mit OS-optimierten Fallbacks)
+        # 3. Globale Variablen setzen (mit korrigiertem simplebuild4 Fallback)
         default_s3 = "C:\\s3" if is_win else "/opt/s3"
-        default_ncam = "C:\\opt\\ncam" if is_win else "/opt/s3_ncam_bonecrew_test"
-        default_s4 = "C:\\opt\\s4" if is_win else "/opt/s4"
+        default_ncam = "C:\\opt\\ncam" if is_win else "/opt/s3_ncam_bonecrew"
+        default_s4 = "C:\\opt\\simplebuild4" if is_win else "/opt/simplebuild4" # KORRIGIERT
 
         globals()["S3_PATH"] = current_cfg.get("s3_custom_path", default_s3)
         globals()["NCAM_PATH"] = current_cfg.get("ncam_custom_path", default_ncam)
@@ -2276,13 +2345,11 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
 
         # 4. System-Werte & Pfad-Synchronisation
         if gui_instance:
-            # S3 / NCam / S4 Pfade GUI-intern setzen
-            if "s3_custom_path" in cfg_updates:
-                gui_instance.S3_PATH = cfg_updates["s3_custom_path"]
-            if "ncam_custom_path" in cfg_updates:
-                gui_instance.NCAM_PATH = cfg_updates["ncam_custom_path"]
-            if "s4_custom_path" in cfg_updates:
-                gui_instance.S4_PATH = cfg_updates["s4_custom_path"]
+            # FIX: Wir laden die Pfade IMMER frisch aus der Gesamt-Config für das GUI-Objekt.
+            # Das verhindert das Einfrieren oder fälschliche Überschneiden im RAM.
+            gui_instance.S3_PATH = current_cfg.get("s3_custom_path", default_s3)
+            gui_instance.NCAM_PATH = current_cfg.get("ncam_custom_path", default_ncam)
+            gui_instance.S4_PATH = current_cfg.get("s4_custom_path", default_s4)
 
             # Timer-Logik für LEDs/Blinken
             blink_speed = current_cfg.get("blink_speed", 500)
@@ -2305,19 +2372,18 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
                     if not timer.isActive():
                         timer.start()
 
-            # --- THEME FIX: Intelligente Prüfung von 'color' und 'theme_mode' ---
+            # --- THEME FIX ---
             theme = str(current_cfg.get("theme_mode", "standard")).lower()
             color = str(current_cfg.get("color", "Classics")).lower()
             
-            # Wenn in einem der beiden Felder "matrix" steht, erzwingen wir das Matrix-Theme
             if "matrix" in theme or "matrix" in color:
                 if hasattr(gui_instance, "enable_matrix_theme"):
                     gui_instance.enable_matrix_theme()
-                current_cfg["theme_mode"] = "matrix"  # Datei synchron halten
+                current_cfg["theme_mode"] = "matrix"
             else:
                 if hasattr(gui_instance, "enable_standard_theme"):
                     gui_instance.enable_standard_theme()
-                current_cfg["theme_mode"] = "standard"  # Datei synchron halten
+                current_cfg["theme_mode"] = "standard"
 
         # 5. Speichern in die Datei
         with open(os.path.abspath(CONFIG_FILE), "w", encoding="utf-8") as f:
@@ -2347,23 +2413,15 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
                     )
                 else:
                     msg = "✅ Einstellungen gespeichert" if lang == "de" else "✅ Settings saved"
-                    # Nutzt die aktualisierte theme-Variable für die Log-Farbe
                     log_color = "#00FF41" if "matrix" in str(current_cfg.get("theme_mode")).lower() else "#00FFFF"
                     pbar_style = "QProgressBar::chunk { background-color: #2ecc71; border-radius: 5px; }"
 
-                # Progressbar Update
                 pbar = getattr(gui_instance, "progress_bar", None)
                 if pbar:
                     pbar.setValue(100)
                     pbar.setFormat(msg)
                     pbar.setStyleSheet(
-                        f"""
-                        QProgressBar {{
-                            text-align: center; color: black; font-weight: 900;
-                            background: #111; border: 1px solid #333;
-                        }}
-                        {pbar_style}
-                        """
+                        f"QProgressBar {{ text-align: center; color: black; font-weight: 900; background: #111; border: 1px solid #333; }} {pbar_style}"
                     )
                     if not is_closing:
                         if hasattr(gui_instance, "pbar_idle"):
@@ -2371,7 +2429,6 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
                         else:
                             QTimer.singleShot(3000, lambda: pbar.setStyleSheet(""))
 
-                # Log Message
                 if hasattr(gui_instance, "log_message"):
                     gui_instance.log_message(
                         f"<span style='color:{log_color}; font-weight:700;'><b>{msg}</b></span>"
@@ -2383,11 +2440,14 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
 
 
 
+
+
 # ===================== CONFIG =====================
 def load_config(gui_instance=None):
     """
     Lädt die Config, korrigiert Pfade für Windows/Linux, ergänzt fehlende Keys
     und synchronisiert die GUI. Optimiert für Oracle VM, Linux & Windows.
+    FIX: Synchronisiert den Fallback-Pfad für SimpleBuild 4 exakt auf 'simplebuild4'.
     """
     import os, json, platform
 
@@ -2401,8 +2461,8 @@ def load_config(gui_instance=None):
 
     # --- Dynamische Standard-Pfade je nach OS ---
     default_s3 = "C:\\s3" if is_win else "/opt/s3"
-    default_ncam = "C:\\opt\\ncam" if is_win else "/opt/s3_ncam_bonecrew_test"
-    default_s4 = "C:\\opt\\s4" if is_win else "/opt/s4"
+    default_ncam = "C:\\opt\\ncam" if is_win else "/opt/s3_ncam_bonecrew"
+    default_s4 = "C:\\opt\\simplebuild4" if is_win else "/opt/simplebuild4" # KORRIGIERT!
 
     default_cfg = {
         "commit_count": 5,
@@ -2411,7 +2471,7 @@ def load_config(gui_instance=None):
         "s3_patch_path": os.path.normpath(base_patch_dir),
         "s3_custom_path": default_s3,
         "ncam_custom_path": default_ncam,
-        "s4_custom_path": default_s4,
+        "s4_custom_path": default_s4, # Nutzt jetzt standardmäßig simplebuild4
         "patch_modifier": "speedy005",
         "EMUREPO": CORRECT_URL,
         "theme_mode": "standard",
@@ -2449,7 +2509,7 @@ def load_config(gui_instance=None):
             if key in path_keys and isinstance(cfg[key], str):
                 old_path = cfg[key]
                 
-                # FIX: Korrekte Prüfung auf Doppelpunkt bei Windows-Laufwerken unter Linux
+                # FIX: Korrekte Prüfung auf Windows-Laufwerke (z.B. C:) unter Linux
                 if not is_win and len(old_path) > 1 and old_path[1] == ":":
                     old_path = old_path[2:]
                 
@@ -2525,6 +2585,8 @@ def load_config(gui_instance=None):
     except Exception as e:
         print(f"⚠️ Kritischer Config Fehler: {e}")
         return default_cfg.copy()
+
+
 
 
 
@@ -3184,53 +3246,6 @@ def clean_patch_folder(gui_instance=None, info_widget=None, progress_callback=No
     pulse_green()
     log("cleanup_success", "success" if all_cleaned else "warning")
     play_sound("success" if all_cleaned else "error")
-
-
-# ===================== ICONS =====================
-ICON_SIZE = 64
-
-
-def create_icons():
-    """
-    Erstellt Icons für die GUI. Die Dateinamen sind kurz, damit
-    keine Probleme mit zu langen Namen auftreten.
-    """
-    from PIL import Image, ImageDraw, ImageFont
-
-    ensure_dir(ICON_DIR)
-
-    icons = {"patch": "Patch", "info": "Info", "git": "Git"}
-
-    for key, text in icons.items():
-        # Icon-Größe
-        img = Image.new("RGBA", (64, 64), (30, 30, 30, 255))
-        draw = ImageDraw.Draw(img)
-
-        # Schriftart
-        try:
-            fnt = ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14
-            )
-        except:
-            fnt = ImageFont.load_default()
-
-        # Textgröße berechnen (textbbox statt textsize)
-        bbox = draw.textbbox((0, 0), text, font=fnt)
-        w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        x, y = (64 - w) // 2, (64 - h) // 2
-
-        draw.text((x, y), text, font=fnt, fill=(255, 255, 255, 255))
-
-        # Kurzer, eindeutiger Dateiname
-        file_name = os.path.join(ICON_DIR, f"{key}.png")
-        img.save(file_name)
-
-
-def get_icon_for(name):
-    safe_name = name.replace(" ", "_").replace("/", "_").replace("\\", "_")
-    path = os.path.join(ICON_DIR, safe_name + ".png")
-    return QIcon(path) if os.path.exists(path) else QIcon()
-
 
 # ===================== OSCAM-EMU GIT FUNCTIONS =====================
 def clean_oscam_emu_git(gui_instance=None, progress_callback=None):
@@ -5104,33 +5119,69 @@ class PatchManagerGUI(QWidget):
     def select_ncam_path_manually(self):
         """Dialog zur manuellen Auswahl des NCam Bonecrew Pfads."""
         from PyQt6.QtWidgets import QFileDialog, QMessageBox
-        import os
+        import os, platform
 
-        lang = getattr(self, "LANG", "de").lower()
+        lang = getattr(self, "LANG", "de").lower()[:2]
         t = {
-            "de": {"hint": "NCam Bonecrew Ordner wählen", "ok": "NCam Pfad gesetzt"},
-            "en": {"hint": "Select NCam Bonecrew folder", "ok": "NCam path set"},
-        }.get(lang, {"hint": "Select NCam Bonecrew folder", "ok": "NCam path set"})
+            "de": {
+                "hint": "NCam Bonecrew Ordner wählen", 
+                "ok": "NCam Pfad gesetzt", 
+                "err": "Datei 's3' nicht im Ordner gefunden!"
+            },
+            "en": {
+                "hint": "Select NCam Bonecrew folder", 
+                "ok": "NCam path set", 
+                "err": "File 's3' not found in the selected folder!"
+            },
+        }.get(lang, {"hint": "Select NCam Bonecrew folder", "ok": "NCam path set", "err": "File 's3' not found!"})
 
-        start_path = getattr(self, "NCAM_PATH", "/opt/s3_ncam_bonecrew_test")
+        is_win = platform.system() == "Windows"
+        default_start = "C:\\opt\\ncam" if is_win else "/opt/s3_ncam_bonecrew"
+        start_path = getattr(self, "NCAM_PATH", default_start)
+        
         chosen_dir = QFileDialog.getExistingDirectory(self, t["hint"], start_path)
+        if not chosen_dir:
+            return
 
-        if chosen_dir and os.path.exists(os.path.join(chosen_dir, "s3")):
-            self.NCAM_PATH = chosen_dir
+        chosen_dir = os.path.normpath(chosen_dir)
+        sub_folder = "s3_ncam_bonecrew"
+
+        # KORREKTUR: Flexibler Check für Windows (s3 und s3.exe abdecken)
+        possible_exes = ["s3", "s3.exe"] if is_win else ["s3"]
+        exists = False
+
+        for exe in possible_exes:
+            path_direct = os.path.join(chosen_dir, exe)
+            path_sub = os.path.join(chosen_dir, sub_folder, exe)
+
+            if os.path.exists(path_direct) or os.path.exists(path_sub):
+                # Wenn der User den Basis-Ordner gewählt hat, hängen wir den Unterordner an
+                if os.path.exists(path_sub) and not chosen_dir.lower().endswith(sub_folder.lower()):
+                    chosen_dir = os.path.join(chosen_dir, sub_folder)
+                exists = True
+                break
+
+        if exists:
+            self.NCAM_PATH = os.path.normpath(chosen_dir)
             save_config({"ncam_custom_path": self.NCAM_PATH}, gui_instance=self)
-            self.update_ui_texts()
-            QMessageBox.information(self, "OK", f"{t['ok']}:\n{chosen_dir}")
+            
+            if hasattr(self, "update_ui_texts"):
+                self.update_ui_texts()
+                
+            QMessageBox.information(self, "OK", f"{t['ok']}:\n{self.NCAM_PATH}")
         else:
-            QMessageBox.warning(self, "Error", "Datei 's3' nicht im Ordner gefunden!")
+            QMessageBox.warning(self, "Error", t["err"])
+
 
     def start_ncam_install(self):
         """Startet die NCam Installation."""
         from PyQt6.QtWidgets import QFileDialog
+        import os, platform
+        
         if hasattr(self, "hide_final_label"):
             self.hide_final_label()
 
         is_de = getattr(self, "LANG", "de") == "de"
-        # Windows-tauglicher Startpfad für den Dialog
         default_start = "C:\\" if platform.system() == "Windows" else "/opt"
         start_path = getattr(self, "NCAM_PATH", default_start)
 
@@ -5143,7 +5194,6 @@ class PatchManagerGUI(QWidget):
         if not chosen_dir:
             return 
 
-        # Pfad säubern (Wichtig für Windows!)
         self.NCAM_PATH = os.path.normpath(chosen_dir)
     
         try:
@@ -5151,12 +5201,14 @@ class PatchManagerGUI(QWidget):
             self.btn_ncam.setEnabled(False)
             self.btn_ncam.setText("⏳ ..." if is_de else "⏳ Busy...")
 
-            # Worker starten (Stelle sicher, dass S3InstallWorker Pfade in "" setzt!)
-            self.ncam_worker = S3InstallWorker(self.NCAM_PATH)
+            # Nutzt den dedizierten NCam-Worker
+            self.ncam_worker = NcamBonecrewInstallWorker(self.NCAM_PATH)
             self.ncam_worker.finished_signal.connect(self.on_ncam_finished)
             self.ncam_worker.start()
         except Exception as e:
             self.on_ncam_finished(False, f"Fehler beim Erstellen des Ordners: {str(e)}")
+
+
 
     def on_ncam_finished(self, success, message):
         """Nach Abschluss des Workers für NCam."""
@@ -5167,8 +5219,8 @@ class PatchManagerGUI(QWidget):
         self.btn_ncam.setEnabled(True)
 
         if success:
-            # 1. Pfad-Logik: Der Worker hat den spezifischen NCam-Unterordner erstellt
-            sub_folder = "s3_ncam_bonecrew_test"
+            # 1. Pfad-Logik: Der Worker nutzt jetzt "s3_ncam_bonecrew"
+            sub_folder = "s3_ncam_bonecrew"
             
             # Wir prüfen, ob der aktuelle NCAM_PATH den Unterordner bereits enthält
             current_base = getattr(self, "NCAM_PATH", "")
@@ -5182,7 +5234,7 @@ class PatchManagerGUI(QWidget):
             # Speichert den Pfad in der json, damit er beim nächsten Start direkt da ist
             save_config({"ncam_custom_path": self.NCAM_PATH}, gui_instance=self)
 
-            # 3. Visuelles Feedback
+            # 3. Visuelles Feedback bei Erfolg
             self.btn_ncam.setStyleSheet(
                 "background-color: green; color: white; font-weight: bold; border-radius: 5px;"
             )
@@ -5198,20 +5250,27 @@ class PatchManagerGUI(QWidget):
                 f"{message}\n\nPfad: {self.NCAM_PATH}" if is_de else f"{message}\n\nPath: {self.NCAM_PATH}"
             )
         else:
-            # Fehler-Zustand
+            # Fehler-Zustand: Roter Button
             self.btn_ncam.setStyleSheet(
                 "background-color: #e74c3c; color: white; font-weight: bold; border-radius: 5px;"
             )
             self.btn_ncam.setText("❌ Fehler" if is_de else "❌ Error")
+            
             QMessageBox.critical(
                 self, 
                 "NCam Installation" if is_de else "NCam Setup", 
                 message
             )
+            
+            # TIPP: Setze hier nach dem Fehler-Dialog den Button-Text zurück,
+            # damit das UI bereit für einen neuen Versuch ist:
+            if hasattr(self, "update_ui_texts"):
+                self.update_ui_texts() # Setzt den Standard-Buttontext wieder ein
+
     def select_s4_path_manually(self, pos=None):
         """
         Dialog zur manuellen Auswahl des SimpleBuild 4 Pfads.
-        Validiert plattformspezifisch auf 'simplebuild.exe' oder 'simplebuild'.
+        Validiert flexibel auf 'simplebuild' und setzt den Pfad direkt auf den Zielordner.
         """
         from PyQt6.QtWidgets import QFileDialog, QMessageBox
         import os, platform
@@ -5219,27 +5278,25 @@ class PatchManagerGUI(QWidget):
         lang = getattr(self, "LANG", "de").lower()[:2]
         t = {
             "de": {
-                "hint": "S4 Ordner wählen", 
+                "hint": "SimpleBuild 4 Ordner wählen", 
                 "ok": "S4 Pfad gesetzt",
                 "err_title": "Fehler",
-                "err_msg": "Die ausführbare Datei '{exe}' wurde in diesem Ordner nicht gefunden!"
+                "err_msg": "Die ausführbare S4-Datei wurde in diesem Ordner nicht gefunden!"
             },
             "en": {
                 "hint": "Select S4 folder", 
                 "ok": "S4 path set",
                 "err_title": "Error",
-                "err_msg": "The executable file '{exe}' was not found in this folder!"
+                "err_msg": "The executable S4 file was not found in this folder!"
             },
         }.get(lang, {
             "hint": "Select SimpleBuild 4 folder", 
             "ok": "S4 path set",
             "err_title": "Error",
-            "err_msg": "The executable file '{exe}' was not found in this folder!"
+            "err_msg": "The executable S4 file was not found in this folder!"
         })
 
-        # Bestimme die richtige ausführbare Datei je nach Betriebssystem (Analog zu update_ui_texts)
         is_win = platform.system() == "Windows"
-        exe_name = "simplebuild.exe" if is_win else "simplebuild"
 
         # Startpfad ermitteln (Fallback auf sinnvollen OS-Standard)
         default_start = "C:\\opt" if is_win else "/opt"
@@ -5252,12 +5309,29 @@ class PatchManagerGUI(QWidget):
         if not chosen_dir:
             return  # Abbruch durch den Nutzer
 
-        # Pfad säubern und normalisieren (Wichtig für Windows/Linux-Wechsel)
-        normalized_dir = os.path.normpath(chosen_dir)
+        chosen_dir = os.path.normpath(chosen_dir)
+        sub_folder = "simplebuild4"
+        possible_exes = ["simplebuild", "simplebuild.exe", "s4", "s4.exe"]
+        
+        final_path = None
 
-        # Prüfe auf die korrekte, betriebssystemabhängige ausführbare Datei
-        if os.path.exists(os.path.join(normalized_dir, exe_name)):
-            self.S4_PATH = normalized_dir
+        # Schleife prüft beide Ebenen separat
+        for exe in possible_exes:
+            path_direct = os.path.join(chosen_dir, exe)
+            path_sub = os.path.join(chosen_dir, sub_folder, exe)
+            
+            # Fall A: User steht direkt im Ordner 'simplebuild4'
+            if os.path.exists(path_direct):
+                final_path = chosen_dir
+                break
+            # Fall B: User hat den übergeordneten Ordner gewählt
+            elif os.path.exists(path_sub):
+                final_path = os.path.join(chosen_dir, sub_folder)
+                break
+
+        if final_path:
+            # Wir erzwingen, dass der Pfad sauber im Speicher landet
+            self.S4_PATH = os.path.normpath(final_path)
             
             # Zentrales Speichern in der Config
             if "save_config" in globals():
@@ -5267,13 +5341,12 @@ class PatchManagerGUI(QWidget):
             if hasattr(self, "update_ui_texts"):
                 self.update_ui_texts()
                 
-            QMessageBox.information(self, "OK", f"{t['ok']}:\n{normalized_dir}")
+            QMessageBox.information(self, "OK", f"{t['ok']}:\n{self.S4_PATH}")
         else:
-            QMessageBox.warning(
-                self, 
-                t["err_title"], 
-                t["err_msg"].format(exe=exe_name)
-            )
+            QMessageBox.warning(self, t["err_title"], t["err_msg"])
+
+
+
 
 
     def start_s4_install(self):
@@ -5399,21 +5472,77 @@ class PatchManagerGUI(QWidget):
     def select_s3_path_manually(self):
         """Dialog zur manuellen Auswahl des S3 Pfads."""
         from PyQt6.QtWidgets import QFileDialog, QMessageBox
-        import os
+        import os, platform
 
-        lang = getattr(self, "LANG", "de").lower()
-        start_path = getattr(self, "S3_PATH", "/opt/s3")
-        chosen_dir = QFileDialog.getExistingDirectory(
-            self, "S3 Ordner wählen", start_path
-        )
+        lang = getattr(self, "LANG", "de").lower()[:2]
+        t = {
+            "de": {
+                "hint": "S3 Ordner wählen", 
+                "ok": "S3 Pfad gesetzt",
+                "err_title": "Fehler",
+                "err_msg": "Die ausführbare S3-Datei wurde in diesem Ordner nicht gefunden!"
+            },
+            "en": {
+                "hint": "Select S3 folder", 
+                "ok": "S3 path set",
+                "err_title": "Error",
+                "err_msg": "The executable S4 file was not found in this folder!"
+            },
+        }.get(lang, {
+            "hint": "Select S3 folder", 
+            "ok": "S3 path set",
+            "err_title": "Error",
+            "err_msg": "The executable S3 file was not found in this folder!"
+        })
 
-        if chosen_dir and os.path.exists(os.path.join(chosen_dir, "s3")):
-            self.S3_PATH = chosen_dir
-            save_config({"s3_custom_path": self.S3_PATH}, gui_instance=self)
-            self.update_ui_texts()
-            QMessageBox.information(self, "S3 Pfad", f"S3 erkannt in:\n{chosen_dir}")
+        is_win = platform.system() == "Windows"
+
+        # Startpfad ermitteln (Fallback auf plattformgerechten Standard)
+        default_start = "C:\\s3" if is_win else "/opt/s3"
+        start_path = getattr(self, "S3_PATH", default_start)
+        if not os.path.exists(start_path):
+            start_path = os.path.expanduser("~")
+
+        chosen_dir = QFileDialog.getExistingDirectory(self, t["hint"], start_path)
+
+        if not chosen_dir:
+            return  # Abbruch durch den Nutzer
+
+        # Pfad säubern und normalisieren
+        chosen_dir = os.path.normpath(chosen_dir)
+        sub_folder = "s3"
+
+        # Wir suchen flexibel nach s3 oder s3.exe
+        possible_exes = ["s3", "s3.exe"]
+        exists = False
+
+        # Alle Kombinationen direkt oder im Unterordner 's3' prüfen
+        for exe in possible_exes:
+            path_direct = os.path.join(chosen_dir, exe)
+            path_sub = os.path.join(chosen_dir, sub_folder, exe)
+            
+            if os.path.exists(path_direct) or os.path.exists(path_sub):
+                # Wenn es im Unterordner liegt, passen wir den Pfad automatisch an
+                if os.path.exists(path_sub) and not chosen_dir.lower().endswith(sub_folder.lower()):
+                    chosen_dir = os.path.join(chosen_dir, sub_folder)
+                exists = True
+                break
+
+        if exists:
+            self.S3_PATH = os.path.normpath(chosen_dir)
+            
+            # Zentrales Speichern in der Config
+            if "save_config" in globals():
+                save_config({"s3_custom_path": self.S3_PATH}, gui_instance=self)
+                
+            # UI direkt aktualisieren, damit der Button sofort grün wird ("S3 OK")
+            if hasattr(self, "update_ui_texts"):
+                self.update_ui_texts()
+                
+            QMessageBox.information(self, "OK", f"{t['ok']}:\n{self.S3_PATH}")
         else:
-            QMessageBox.warning(self, "Fehler", "Keine 's3' Startdatei gefunden!")
+            QMessageBox.warning(self, t["err_title"], t["err_msg"])
+
 
     def start_s3_install(self):
         """Startet die S3 Installation über Worker, Pfad wählbar und OS-optimiert."""
@@ -5793,45 +5922,71 @@ class PatchManagerGUI(QWidget):
             self.telemetry_cb.blockSignals(False)
 
     def start_s3_menu(self):
-        """Sucht s3 (bevorzugt Config-Pfad) und startet das Terminal mit 'sudo ./s3 menu'."""
+        """Sucht s3 (bevorzugt Config-Pfad) und startet das Terminal."""
 
         # --- Final Label ausblenden ---
         if hasattr(self, "hide_final_label"):
             self.hide_final_label()
         elif hasattr(self, "final_label") and self.final_label:
             self.final_label.hide()
+            
         import os, shutil, platform
 
         s3_exec = None
         is_de = getattr(self, "LANG", "de") == "de"
-        s3_binary = "s3.exe" if platform.system() == "Windows" else "s3"
+        is_win = platform.system() == "Windows"
 
-        # 1. Dynamische Suchliste: Config-Pfad hat immer Vorrang!
-        search_list = [
-            os.path.join(
-                getattr(self, "S3_PATH", "/opt/s3"), s3_binary
-            ),  # Dein gewählter Pfad
-            "/opt/s3_neu/" + s3_binary,
-            "/opt/s3/" + s3_binary,
-            os.path.expanduser(f"~/s3/{s3_binary}"),
-            shutil.which("s3"),
-        ]
+        # 1. Basis-Pfad holen (mit plattformgerechtem Fallback)
+        default_start = "C:\\s3" if is_win else "/opt/s3"
+        s3_path = getattr(self, "S3_PATH", default_start)
+        sub_folder = "s3"
 
-        # 2. Den ersten Treffer finden
-        for path in search_list:
-            if path and os.path.exists(path) and os.access(path, os.X_OK):
-                s3_exec = path
-                break
+        # Mögliche Dateinamen für das Skript/die Binary
+        possible_names = ["s3", "s3.exe"] if is_win else ["s3"]
+        possible_paths = []
+
+        # Suchliste dynamisch aufbauen
+        # Priorität 1: Direkt im gewählten S3_PATH oder dessen Unterordner
+        for name in possible_names:
+            possible_paths.append(os.path.join(s3_path, name))
+            possible_paths.append(os.path.join(s3_path, sub_folder, name))
+
+        # Priorität 2: Globale System-Fallbacks
+        if is_win:
+            possible_paths.extend([
+                "C:\\s3\\s3",
+                "C:\\s3\\s3.exe",
+                "C:\\opt\\s3\\s3",
+            ])
+        else:
+            possible_paths.extend([
+                "/opt/s3_neu/s3",
+                "/opt/s3/s3",
+                os.path.expanduser("~/s3/s3"),
+                shutil.which("s3"),
+            ])
+
+        # 2. Den ersten Treffer validieren und finden
+        for path in possible_paths:
+            if path and os.path.exists(path) and not os.path.isdir(path):
+                # Rechteprüfung: os.X_OK nur auf Linux/macOS erzwingen
+                if is_win or os.access(path, os.X_OK):
+                    s3_exec = os.path.normpath(path)
+                    
+                    # Automatische Pfad-Korrektur, falls im Unterordner gefunden
+                    if sub_folder in path.lower() and not s4_path.lower().endswith(sub_folder.lower()):
+                        self.S3_PATH = os.path.normpath(os.path.join(s3_path, sub_folder))
+                    break
 
         # 3. Ausführung oder Fehlermeldung
         if s3_exec:
             # Info-Log für den User (Optional)
-            if hasattr(self, "append_info"):
+            if hasattr(self, "append_info") and hasattr(self, "info_text"):
                 msg = f"🚀 S3 Menü: {s3_exec}"
                 self.append_info(self.info_text, msg, "info")
 
-            # Startet Terminal mit sudo (für Toolchains/Build-Rechte)
-            self.open_terminal(s3_path=s3_exec, use_sudo=True)
+            # Startet Terminal (Nutzt echtes Root-Sudo nur auf Linux, unter Windows deaktiviert)
+            self.open_terminal(s3_path=s3_exec, use_sudo=not is_win)
         else:
             # Sprachabhängige Fehlermeldung
             err_msg = (
@@ -5839,15 +5994,17 @@ class PatchManagerGUI(QWidget):
                 if is_de
                 else "❌ Error: s3 executable not found!"
             )
-            if hasattr(self, "info_text"):
+            if hasattr(self, "info_text") and self.info_text:
                 self.info_text.append(
                     f'<br><span style="color:red;"><b>{err_msg}</b></span>'
                 )
 
             # Fallback: Nur leeres Terminal öffnen
             self.open_terminal()
+
+    
     def start_s4_menu(self):
-        """Sucht s4 (bevorzugt Config-Pfad) und startet das Terminal mit 'sudo ./s4 menu'."""
+        """Sucht SimpleBuild 4 (bevorzugt Config-Pfad) und startet das Terminal."""
 
         # --- Final Label ausblenden ---
         if hasattr(self, "hide_final_label"):
@@ -5859,52 +6016,78 @@ class PatchManagerGUI(QWidget):
 
         s4_exec = None
         is_de = getattr(self, "LANG", "de") == "de"
-        s4_binary = "s4.exe" if platform.system() == "Windows" else "s4"
+        is_win = platform.system() == "Windows"
 
-        # 1. Dynamische Suchliste: Config-Pfad hat immer Vorrang!
-        search_list = [
-            os.path.join(
-                getattr(self, "S4_PATH", "/opt/s4"), s4_binary
-            ),  # Dein gewählter Pfad
-            "/opt/s4_neu/" + s4_binary,
-            "/opt/s4/" + s4_binary,
-            os.path.expanduser(f"~/s4/{s4_binary}"),
-            shutil.which("s4"),
-        ]
+        # 1. Basis-Pfad holen (Fallback auf deinen neuen Ordnernamen 'simplebuild4')
+        default_start = "C:\\opt\\simplebuild4" if is_win else "/opt/simplebuild4"
+        s4_path = getattr(self, "S4_PATH", default_start)
+        sub_folder = "simplebuild4"
 
-        # 2. Den ersten Treffer finden
-        for path in search_list:
-            if path and os.path.exists(path) and os.access(path, os.X_OK):
-                s4_exec = path
-                break
+        # GEÄNDERT: S4 nutzt im Streamboard-Git die Namen 'simplebuild' oder 'simplebuild.exe'
+        possible_names = ["simplebuild", "simplebuild.exe", "s4", "s4.exe"]
+        possible_paths = []
+
+        # Suchliste dynamisch und plattformkonform aufbauen
+        # Priorität 1: Direkt im gewählten S4_PATH oder dessen Unterordner
+        for name in possible_names:
+            possible_paths.append(os.path.join(s4_path, name))
+            possible_paths.append(os.path.join(s4_path, sub_folder, name))
+
+        # Priorität 2: Globale System-Fallbacks
+        if is_win:
+            possible_paths.extend([
+                "C:\\opt\\simplebuild4\\simplebuild.exe",
+                "C:\\opt\\simplebuild4\\simplebuild",
+            ])
+        else:
+            possible_paths.extend([
+                "/opt/simplebuild4/simplebuild",
+                "/opt/s4/simplebuild",
+                os.path.expanduser("~/simplebuild4/simplebuild"),
+                shutil.which("simplebuild"),
+                shutil.which("s4"),
+            ])
+
+        # 2. Den ersten Treffer validieren und finden
+        for path in possible_paths:
+            if path and os.path.exists(path) and not os.path.isdir(path):
+                # Rechteprüfung: os.X_OK nur auf Linux/macOS erzwingen
+                if is_win or os.access(path, os.X_OK):
+                    s4_exec = os.path.normpath(path)
+                    
+                    # Falls die Datei im Unterordner lag, korrigieren wir die Variable im Speicher direkt mit
+                    if sub_folder in path.lower() and not s4_path.lower().endswith(sub_folder.lower()):
+                        self.S4_PATH = os.path.normpath(os.path.join(s4_path, sub_folder))
+                    break
 
         # 3. Ausführung oder Fehlermeldung
         if s4_exec:
             # Info-Log für den User (Optional)
-            if hasattr(self, "append_info"):
+            if hasattr(self, "append_info") and hasattr(self, "info_text"):
                 msg = f"🚀 S4 Menü: {s4_exec}"
                 self.append_info(self.info_text, msg, "info")
 
-            # Startet Terminal mit sudo (für Toolchains/Build-Rechte)
-            self.open_terminal(s4_path=s4_exec, use_sudo=True)
+            # Startet Terminal (Nutzt echtes Root-Sudo nur auf Linux, falls use_sudo=True)
+            self.open_terminal(s3_path=s4_exec, use_sudo=not is_win)
 
         else:
             # Sprachabhängige Fehlermeldung
             err_msg = (
-                "❌ Fehler: s4 Startdatei nicht gefunden!"
+                "❌ Fehler: SimpleBuild 4 Startdatei nicht gefunden!"
                 if is_de
-                else "❌ Error: s4 executable not found!"
+                else "❌ Error: SimpleBuild 4 executable not found!"
             )
-            if hasattr(self, "info_text"):
+            if hasattr(self, "info_text") and self.info_text:
                 self.info_text.append(
                     f'<br><span style="color:red;"><b>{err_msg}</b></span>'
                 )
 
             # Fallback: Nur leeres Terminal öffnen
             self.open_terminal()
+
     
     def start_ncam_menu(self):
-        """Sucht NCam (spezifisch im Bonecrew-Pfad) und startet das Terminal mit 'sudo ./s3 menu'."""
+        """Sucht NCam (spezifisch im Bonecrew-Pfad) und startet das Terminal mit './s3 menu'."""
 
         # --- Final Label ausblenden ---
         if hasattr(self, "hide_final_label"):
@@ -5915,22 +6098,52 @@ class PatchManagerGUI(QWidget):
         import os, platform
 
         is_de = getattr(self, "LANG", "de") == "de"
-        s3_binary = "s3.exe" if platform.system() == "Windows" else "s3"
+        is_win = platform.system() == "Windows"
 
-        # 1. Spezifischer NCam-Suchpfad (Bonecrew Test)
-        # Wir nehmen hier NUR den NCAM_PATH, damit er nicht das normale S3 öffnet!
-        ncam_path = getattr(self, "NCAM_PATH", "/opt/s3_ncam_bonecrew_test")
-        ncam_exec = os.path.join(ncam_path, s3_binary)
+        # 1. Spezifischer NCam-Suchpfad (mit neuem OS-Standard ohne _test)
+        default_start = "C:\\opt\\ncam" if is_win else "/opt/s3_ncam_bonecrew"
+        ncam_path = getattr(self, "NCAM_PATH", default_start)
+        sub_folder = "s3_ncam_bonecrew"
 
-        # 2. Prüfung & Ausführung
-        if os.path.exists(ncam_exec) and os.access(ncam_exec, os.X_OK):
+        # Mögliche Dateinamen für das Skript/die Binary
+        possible_names = ["s3", "s3.exe"] if is_win else ["s3"]
+        ncam_exec = None
+
+        # Intelligente Pfad-Ermittlung: Prüft direkt und im Unterordner nach s3/s3.exe
+        for name in possible_names:
+            path_direct = os.path.join(ncam_path, name)
+            path_sub = os.path.join(ncam_path, sub_folder, name)
+
+            if os.path.exists(path_direct):
+                ncam_exec = path_direct
+                break
+            elif os.path.exists(path_sub):
+                ncam_exec = path_sub
+                # FIX: Variable richtig benannt (ncam_path statt s4_path)
+                if not ncam_path.lower().endswith(sub_folder.lower()):
+                    self.NCAM_PATH = os.path.normpath(os.path.join(ncam_path, sub_folder))
+                    # Korrektur direkt permanent in der Config speichern
+                    if "save_config" in globals():
+                        save_config({"ncam_custom_path": self.NCAM_PATH}, gui_instance=self, silent=True)
+                break
+
+        # Sicherheits- und Rechteprüfung (os.X_OK nur auf Linux/macOS erzwingen)
+        has_access = False
+        if ncam_exec:
+            if is_win:
+                has_access = True  # Windows benötigt kein os.X_OK Flags für Bash-Skripte
+            else:
+                has_access = os.access(ncam_exec, os.X_OK)
+
+        # 2. Ausführung
+        if ncam_exec and has_access:
             # Info-Log für den User
-            if hasattr(self, "append_info"):
+            if hasattr(self, "append_info") and hasattr(self, "info_text"):
                 msg = f"🚀 NCam Menü: {ncam_exec}"
                 self.append_info(self.info_text, msg, "info")
 
-            # Startet Terminal im NCam-Verzeichnis mit sudo
-            self.open_terminal(s3_path=ncam_exec, use_sudo=True)
+            # Startet Terminal im NCam-Verzeichnis (Nutzt echtes Root-Sudo nur auf Linux)
+            self.open_terminal(s3_path=ncam_exec, use_sudo=not is_win)
         else:
             # Fehler: NCam nicht gefunden (Installation anbieten)
             err_msg = (
@@ -5953,35 +6166,73 @@ class PatchManagerGUI(QWidget):
             if ret == QMessageBox.StandardButton.Yes:
                 self.start_ncam_install()
 
-            if hasattr(self, "info_text"):
+            if hasattr(self, "info_text") and self.info_text:
                 self.info_text.append(
                     f'<br><span style="color:orange;"><b>{err_msg}</b></span>'
                 )
 
+
+
     def find_s3_executable(self):
         """Sucht automatisch nach der s3-Startdatei an bekannten Orten."""
-        import os, shutil
+        import os, shutil, platform
 
+        is_win = platform.system() == "Windows"
+        
         # 1. Prüfen, ob s3 global im System-PATH bekannt ist
         system_path = shutil.which("s3")
         if system_path:
             return system_path
 
-        # 2. Liste der wahrscheinlichsten Verzeichnisse (wird nacheinander abgeklappert)
-        search_dirs = [
-            "/opt/s3_neu",
-            "/opt/s3",
-            os.path.expanduser("~/s3"),
-            os.path.expanduser("~/simplebuild"),
-            "/var/lib/s3",
-        ]
+        # 2. Dynamische Liste der wahrscheinlichsten Verzeichnisse generieren
+        search_dirs = []
 
-        for d in search_dirs:
-            full_path = os.path.join(d, "s3")
-            if os.path.exists(full_path) and os.access(full_path, os.X_OK):
-                return full_path
+        # Füge die aktuell in der Instanz konfigurierten Pfade als höchste Priorität hinzu
+        for path_attr in ["S3_PATH", "NCAM_PATH", "S4_PATH"]:
+            current_val = getattr(self, path_attr, None)
+            if current_val:
+                search_dirs.append(current_val)
+
+        # Standard-Fallback-Verzeichnisse für Linux und Windows
+        if is_win:
+            search_dirs.extend([
+                "C:\\s3",
+                "C:\\opt\\ncam",
+                "C:\\opt\\s4",
+                "C:\\opt\\s3",
+            ])
+        else:
+            search_dirs.extend([
+                "/opt/s3",
+                "/opt/s3_ncam_bonecrew",
+                "/opt/s4",
+                os.path.expanduser("~/s3"),
+                os.path.expanduser("~/simplebuild"),
+                "/var/lib/s3",
+            ])
+
+        # Unterordner-Strukturen, die von den Workern angelegt werden
+        sub_folders = ["", "s3", "s3_ncam_bonecrew", "s4"]
+        
+        # Mögliche Dateinamen (S4 nutzt simplebuild/s4, die anderen s3)
+        possible_exes = ["s3", "s3.exe", "s4", "s4.exe", "simplebuild", "simplebuild.exe"]
+
+        # 3. Such-Schleife über alle Pfad-Kombinationen
+        for base_dir in search_dirs:
+            if not base_dir or not os.path.exists(base_dir):
+                continue
+                
+            for sub in sub_folders:
+                for exe in possible_exes:
+                    full_path = os.path.normpath(os.path.join(base_dir, sub, exe))
+                    
+                    if os.path.exists(full_path) and not os.path.isdir(full_path):
+                        # Rechteprüfung: os.X_OK nur auf Linux/macOS erzwingen
+                        if is_win or os.access(full_path, os.X_OK):
+                            return full_path
 
         return None  # Nichts gefunden
+
 
     def apply_global_button_style(self, text_color="#EAFF00"):
         """Setzt die Schriftfarbe für ALLE Buttons in der GUI zentral."""
@@ -8513,7 +8764,7 @@ class PatchManagerGUI(QWidget):
             self.loading_overlay.setGeometry(self.rect())
 
     def open_terminal(self, **kwargs):
-        """Öffnet Terminal (S3 oder NCam) mit Sudo-Support, Regenbogen-Progress und Sound."""
+        """Öffnet Terminal (S3, S4 oder NCam) mit Sudo-Support, Regenbogen-Progress und Sound."""
         if hasattr(self, "hide_final_label"):
             self.hide_final_label()
         elif hasattr(self, "final_label") and self.final_label:
@@ -8530,9 +8781,14 @@ class PatchManagerGUI(QWidget):
         is_de = lang == "de"
         pbar = getattr(self, "progress_bar", None)
 
-        # Erkennung ob NCam oder S3 für das Log-Feedback
-        is_ncam = "ncam" in (s3_path.lower() if s3_path else "")
-        proj_name = "NCam" if is_ncam else "S3"
+        # GEÄNDERT: Erweiterte Erkennung für S3, S4 und NCam
+        s3_path_lower = s3_path.lower() if s3_path else ""
+        if "ncam" in s3_path_lower:
+            proj_name = "NCam"
+        elif "s4" in s3_path_lower or "simplebuild4" in s3_path_lower:
+            proj_name = "S4"
+        else:
+            proj_name = "S3"
 
         T_LOAD = (
             (
@@ -8567,18 +8823,36 @@ class PatchManagerGUI(QWidget):
 
             if s3_path:
                 s3_dir = os.path.dirname(s3_path)
-                # Stellt sicher, dass das Terminal im richtigen Ordner startet
-                s3_cmd = "./s3 menu"
+                # GEÄNDERT: Holt den echten Dateinamen (z.B. s3, s4 oder simplebuild) dynamisch heraus
+                exe_name = os.path.basename(s3_path)
+                
+                s3_cmd = f"./{exe_name} menu"
                 if use_sudo and system == "Linux":
-                    s3_cmd = "sudo ./s3 menu"
-                # cd in den Ordner (mit Anführungszeichen für Pfade mit Leerzeichen)
-                exec_cmd = f"cd '{s3_dir}' && {s3_cmd}"
+                    s3_cmd = f"sudo ./{exe_name} menu"
+                
+                # cd in den Ordner (plattformkonforme Anführungszeichen für Pfade mit Leerzeichen)
+                if system == "Windows":
+                    # Windows Git-Bash / MinGW bevorzugt doppelte Anführungszeichen
+                    exec_cmd = f'cd "{s3_dir}" && bash {exe_name} menu'
+                else:
+                    exec_cmd = f"cd '{s3_dir}' && {s3_cmd}"
 
             # 4. BETRIEBSSYSTEM LOGIK
             if system == "Windows":
-                # Windows Pfad-Logik (Backslashes beachten)
-                win_cmd = exec_cmd.replace("/", "\\") if exec_cmd else ""
-                cmd_args = ["cmd", "/K", win_cmd] if win_cmd else ["cmd"]
+                # GEÄNDERT: Git-Bash Pfad ermitteln, falls installiert (Zwingend nötig für sh/bash Skripte)
+                git_bash = shutil.which("bash") or os.path.expandvars("%ProgramFiles%\\Git\\bin\\bash.exe")
+                
+                if exec_cmd:
+                    if os.path.exists(git_bash):
+                        # Startet direkt in der echten Git-Bash (Diskretes, sauberes Fenster)
+                        cmd_args = [git_bash, "--login", "-i", "-c", f"{exec_cmd.replace('\\', '/')}; exec bash"]
+                    else:
+                        # Fallback auf CMD, ruft dort aber die systemweite bash auf
+                        win_cmd = exec_cmd.replace("/", "\\")
+                        cmd_args = ["cmd", "/K", win_cmd]
+                else:
+                    cmd_args = ["cmd"]
+
                 subprocess.Popen(cmd_args, creationflags=subprocess.CREATE_NEW_CONSOLE)
                 terminal_opened = True
 
@@ -8593,7 +8867,6 @@ class PatchManagerGUI(QWidget):
                 for term in terminals:
                     if shutil.which(term):
                         if exec_cmd:
-                            # Terminal-spezifische Argumente
                             if term == "gnome-terminal":
                                 args = [
                                     term,
@@ -8641,6 +8914,7 @@ class PatchManagerGUI(QWidget):
                     else lambda: pbar.setValue(0)
                 ),
             )
+
 
     def select_patch_path(self):
         """Öffnet Verzeichnis-Dialog mit Regenbogen-Progress, Sound und Auto-Reset zu Idle."""
@@ -10096,12 +10370,38 @@ class PatchManagerGUI(QWidget):
             """
             )
 
-        # --- 2. Hilfsfunktion für S3/NCam (Spezialfarben & Tooltips) ---
+        # --- 2. Hilfsfunktion für S3/NCam/S4 (Spezialfarben & Tooltips) ---
         def apply_s3_btn_logic(btn, current_path, default_label):
             if not btn:
                 return
-            s3_exe = "s3.exe" if platform.system() == "Windows" else "s3"
-            exists = os.path.exists(os.path.join(current_path, s3_exe))
+            
+            # Unterordner-Zuordnung
+            sub_map = {"S3": "s3", "NCam": "s3_ncam_bonecrew", "S4": "simplebuild4"}
+            sub_folder = sub_map.get(default_label, "")
+            
+            # KORREKTUR: Wir erweitern die S4-Suche radikal auf ALLE möglichen Dateinamen!
+            if default_label == "S4":
+                possible_names = ["simplebuild", "simplebuild.exe", "s4", "s4.exe", "simplebuild4", "simplebuild4.exe"]
+            else:
+                possible_names = ["s3", "s3.exe"]
+                
+            exists = False
+            current_path_clean = os.path.normpath(str(current_path))
+
+            for name in possible_names:
+                # Pfad A: Datei liegt direkt im ausgewählten Ordner
+                path_direct = os.path.join(current_path_clean, name)
+                
+                # Pfad B: Datei liegt im Unterordner (wird nur geprüft, wenn Pfad nicht schon darauf endet)
+                if sub_folder and not current_path_clean.lower().endswith(sub_folder.lower()):
+                    path_sub = os.path.join(current_path_clean, sub_folder, name)
+                else:
+                    path_sub = ""
+                
+                # Wenn die Datei irgendwo existiert, ist der Button gültig!
+                if os.path.exists(path_direct) or (path_sub and os.path.exists(path_sub)):
+                    exists = True
+                    break
 
             if is_de:
                 help_install = f"<b>Linksklick:</b> {default_label} Installation starten<br><b>Rechtsklick:</b> Ordner wählen"
@@ -10131,7 +10431,9 @@ class PatchManagerGUI(QWidget):
             """
             )
 
-                # --- 3. UI Aktualisierung starten ---
+
+
+        # --- 3. UI Aktualisierung starten ---
         if pbar:
             pbar.setValue(20)
             pbar.show()
@@ -10147,17 +10449,27 @@ class PatchManagerGUI(QWidget):
                 lbl.setText(de_t if is_de else en_t)
 
         # --- 4. S3, S4 & NCam ---
+        is_win = platform.system() == "Windows"
+        
+        # S3 Button
         apply_s3_btn_logic(
-            getattr(self, "btn_s3", None), getattr(self, "S3_PATH", "/opt/s3"), "S3"
+            getattr(self, "btn_s3", None), 
+            getattr(self, "S3_PATH", "C:\\s3" if is_win else "/opt/s3"), 
+            "S3"
         )
-        # HIER ERGÄNZT: SimpleBuild 4 Logik-Anwendung
+        
+        # S4 Button KORRIGIERT: Fallback angepasst auf 'simplebuild4', um Fehltreffer zu vermeiden
         apply_s3_btn_logic(
-            getattr(self, "btn_s4", None), getattr(self, "S4_PATH", "/opt/s4"), "S4"
+            getattr(self, "btn_s4", None), 
+            getattr(self, "S4_PATH", "C:\\opt\\simplebuild4" if is_win else "/opt/simplebuild4"), 
+            "S4"
         )
+        
+        # NCam Button KORRIGIERT: Fallback angepasst an load_config Standard
         apply_s3_btn_logic(
             getattr(self, "btn_ncam", None),
-            getattr(self, "NCAM_PATH", "/opt/s3_ncam_bonecrew_test"),
-            "NCam",
+            getattr(self, "NCAM_PATH", "C:\\opt\\ncam" if is_win else "/opt/s3_ncam_bonecrew"),
+            "NCam"
         )
 
         # --- 5. Andere Buttons mit Tooltips ---
@@ -10220,7 +10532,7 @@ class PatchManagerGUI(QWidget):
             ),
         ]
         for btn, de, en, icon, tt in mapping:
-            if btn:  # Sicherheits-Check hinzugefügt
+            if btn:
                 apply_final_style(btn, de if is_de else en, icon)
                 btn.setToolTip(tt)
 
@@ -10238,9 +10550,10 @@ class PatchManagerGUI(QWidget):
                 "exit": QStyle.StandardPixmap.SP_DialogCloseButton,
             }
             for key, btn in self.buttons.items():
-                if key in grid_icons and btn:  # Sicherheits-Check hinzugefügt
+                if key in grid_icons and btn:
                     func_get_t = getattr(self, "get_t", lambda k, d: d)
                     apply_final_style(btn, func_get_t(key, key), grid_icons[key])
+
 
         # --- 6.5 Matrix Button ---
         if hasattr(self, "btn_matrix") and self.btn_matrix:
