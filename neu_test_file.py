@@ -2449,7 +2449,7 @@ def load_config(gui_instance=None):
     """
     Lädt die Config, korrigiert Pfade für Windows/Linux, ergänzt fehlende Keys
     und synchronisiert die GUI. Optimiert für Oracle VM, Linux & Windows.
-    FIX: Korrigiert die Linux-Laufwerksbereinigung und erzwingt ein stabiles UI-Refresh.
+    FIX: Verhindert, dass Pfad-Normalisierungen beim Start die Buttons auf Orange zurückwerfen.
     """
     import os, json, platform
     from PyQt6.QtCore import QTimer
@@ -2508,16 +2508,17 @@ def load_config(gui_instance=None):
                 cfg[key] = value
                 needs_save = True
             
-            # WICHTIG: Bestehende Pfade aus der Config an das aktuelle OS anpassen
+            # WICHTIG: Bestehende Pfade an das aktuelle OS anpassen
             if key in path_keys and isinstance(cfg[key], str):
                 old_path = cfg[key]
                 
-                # FIX: Korrekte Prüfung auf Windows-Laufwerke (z.B. C:) unter Linux/VMs
+                # Linux-Fix für Windows-Laufwerksbuchstaben
                 if not is_win and len(old_path) > 1 and old_path[1] == ":":
                     old_path = old_path[2:]
                 
-                cfg[key] = os.path.normpath(old_path)
-                if cfg[key] != old_path:
+                cleaned_path = os.path.normpath(old_path)
+                if cfg[key] != cleaned_path:
+                    cfg[key] = cleaned_path
                     needs_save = True
 
         # --- Korrektur der EMUREPO URL ---
@@ -2533,7 +2534,7 @@ def load_config(gui_instance=None):
             except Exception as e:
                 print(f"⚠️ Fehler beim Speichern der Config: {e}")
 
-        # --- Globale Variables setzen ---
+        # --- Globale Variablen setzen ---
         globals()["EMUREPO"] = cfg["EMUREPO"]
         globals()["PATCH_MODIFIER"] = cfg["patch_modifier"]
         globals()["THEME_MODE"] = cfg.get("theme_mode", "standard")
@@ -2544,10 +2545,12 @@ def load_config(gui_instance=None):
 
         # --- GUI-Integration ---
         if gui_instance:
+            # ERZWUNGEN: Wir befüllen die Instanz-Config als ALLERERSTES,
+            # damit update_ui_texts beim Zeichnen sofort darauf zugreifen kann!
+            gui_instance.current_config = cfg
             gui_instance.S3_PATH = cfg["s3_custom_path"]
             gui_instance.NCAM_PATH = cfg["ncam_custom_path"]
             gui_instance.S4_PATH = cfg["s4_custom_path"]
-            gui_instance.current_config = cfg
 
             # Buttons Höhe setzen
             button_height = getattr(gui_instance, "BUTTON_HEIGHT", 40)
@@ -2583,16 +2586,16 @@ def load_config(gui_instance=None):
                     if hasattr(gui_instance, "force_user_leds_static"):
                         gui_instance.force_user_leds_static()
 
-            # FIX: Zwingt die GUI, nach dem vollständigen Laden der App-Events
-            # die Buttons zu prüfen. Das verhindert das "Verschwinden" der grünen Stati!
+            # Startet die Textaktualisierung sicher nach 50ms, wenn der Splash-Screen die GUI freigibt
             if hasattr(gui_instance, "update_ui_texts"):
-                QTimer.singleShot(0, gui_instance.update_ui_texts)
+                QTimer.singleShot(50, gui_instance.update_ui_texts)
 
         return cfg
 
     except Exception as e:
         print(f"⚠️ Kritischer Config Fehler: {e}")
         return default_cfg.copy()
+
 
 
 
@@ -5982,9 +5985,12 @@ class PatchManagerGUI(QWidget):
                 if is_win or os.access(path, os.X_OK):
                     s3_exec = os.path.normpath(path)
                     
-                    # Automatische Pfad-Korrektur, falls im Unterordner gefunden
-                    if sub_folder in path.lower() and not s4_path.lower().endswith(sub_folder.lower()):
+                    # FIX: Variable richtig auf s3_path korrigiert!
+                    if sub_folder in path.lower() and not s3_path.lower().endswith(sub_folder.lower()):
                         self.S3_PATH = os.path.normpath(os.path.join(s3_path, sub_folder))
+                        # Direkt permanent in der config.json absichern
+                        if "save_config" in globals():
+                            save_config({"s3_custom_path": self.S3_PATH}, gui_instance=self, silent=True)
                     break
 
         # 3. Ausführung oder Fehlermeldung
@@ -6010,6 +6016,7 @@ class PatchManagerGUI(QWidget):
 
             # Fallback: Nur leeres Terminal öffnen
             self.open_terminal()
+
 
     
     def start_s4_menu(self):
@@ -10457,27 +10464,40 @@ class PatchManagerGUI(QWidget):
             if lbl:
                 lbl.setText(de_t if is_de else en_t)
 
-        # --- 4. S3, S4 & NCam (Autarke Fallback-Sicherung direkt aus Config) ---
+        # --- 4. S3, S4 & NCam (Absolut unbrechbares Direkt-Laden von Festplatte) ---
+        import os, json
         is_win = platform.system() == "Windows"
         
-        cfg = getattr(self, "current_config", {})
-        if not isinstance(cfg, dict):
-            cfg = {}
+        # 1. Wir holen die Config direkt live aus der Datei, um jegliche RAM-Timing-Fehler beim Start zu killen
+        CONFIG_FILE = globals().get("CONFIG_FILE", "config.json")
+        file_cfg = {}
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                    file_cfg = json.load(f)
+            except Exception:
+                file_cfg = {}
+        
+        if not isinstance(file_cfg, dict):
+            file_cfg = {}
 
-        # Live-Auslesen erzwingen, falls RAM-Variablen beim Start überschrieben wurden
-        s3_path = cfg.get("s3_custom_path", getattr(self, "S3_PATH", "C:\\s3" if is_win else "/opt/s3"))
-        s4_path = cfg.get("s4_custom_path", getattr(self, "S4_PATH", "C:\\opt\\simplebuild4" if is_win else "/opt/simplebuild4"))
-        ncam_path = cfg.get("ncam_custom_path", getattr(self, "NCAM_PATH", "C:\\opt\\ncam" if is_win else "/opt/s3_ncam_bonecrew"))
+        # 2. Pfade mit höchster Priorität direkt aus der gelesenen Datei ziehen
+        s3_path = file_cfg.get("s3_custom_path", getattr(self, "S3_PATH", "C:\\s3" if is_win else "/opt/s3"))
+        s4_path = file_cfg.get("s4_custom_path", getattr(self, "S4_PATH", "C:\\opt\\simplebuild4" if is_win else "/opt/simplebuild4"))
+        ncam_path = file_cfg.get("ncam_custom_path", getattr(self, "NCAM_PATH", "C:\\opt\\ncam" if is_win else "/opt/s3_ncam_bonecrew"))
 
-        # Instanzvariablen im RAM synchron halten
-        self.S3_PATH = s3_path
-        self.S4_PATH = s4_path
-        self.NCAM_PATH = ncam_path
+        # 3. Synchronisiere die RAM-Variablen, damit Linksklicks (Menü öffnen) sofort klappen
+        self.S3_PATH = os.path.normpath(str(s3_path))
+        self.S4_PATH = os.path.normpath(str(s4_path))
+        self.NCAM_PATH = os.path.normpath(str(ncam_path))
+        
+        # Falls die GUI-Instanz ihre Config verloren hat, biegen wir das hier auch direkt wieder gerade
+        self.current_config = file_cfg
 
-        # Buttons mit den validierten Pfaden prüfen und färben
-        apply_s3_btn_logic(getattr(self, "btn_s3", None), s3_path, "S3")
-        apply_s3_btn_logic(getattr(self, "btn_s4", None), s4_path, "S4")
-        apply_s3_btn_logic(getattr(self, "btn_ncam", None), ncam_path, "NCam")
+        # 4. Buttons mit den physikalisch echten Pfaden füttern und färben
+        apply_s3_btn_logic(getattr(self, "btn_s3", None), self.S3_PATH, "S3")
+        apply_s3_btn_logic(getattr(self, "btn_s4", None), self.S4_PATH, "S4")
+        apply_s3_btn_logic(getattr(self, "btn_ncam", None), self.NCAM_PATH, "NCam")
 
 
         # --- 5. Andere Buttons mit Tooltips ---
@@ -15683,7 +15703,7 @@ if __name__ == "__main__":
     else:
         print("[!] auto_install_emoji_font() Funktion wurde nicht gefunden.")
 
-    # ---------------- 5. GLOBAL STATE & GUI START LOGIK ----------------
+        # ---------------- 5. GLOBAL STATE & GUI START LOGIK ----------------
     main_window = None
 
     def _actually_start():
@@ -15711,16 +15731,30 @@ if __name__ == "__main__":
                 qr.moveCenter(cp)
                 main_window.move(qr.topLeft())
                 main_window.show()
+                main_window.raise_()
             else:
-                # FullHD oder kleiner: Maximiert
+                # FullHD oder kleiner: Maximiert darstellen
                 main_window.showMaximized()
+                main_window.show()     # FIX: Garantiert Sichtbarkeit auf allen Systemen
+                main_window.raise_()    # FIX: Erzwingt den Fokus in den Vordergrund
+
+            # =================================================================
+            # ERZWUNGENER NEUSTART-FIX: 
+            # Sobald das Fenster nach dem Cinematic Splash erscheint, geben wir 
+            # PyQt 100ms Zeit, die Buttons im Grafikspeicher zu verankern.
+            # Dann feuern wir das Festplatten-Auslesen ab, damit alle Buttons grün werden!
+            # =================================================================
+            if hasattr(main_window, "update_ui_texts"):
+                QTimer.singleShot(100, main_window.update_ui_texts)
+            # =================================================================
 
             # Akustische Rückmeldung beim Start
             if platform.system() == "Windows":
                 try:
                     import winsound
                     winsound.Beep(1500, 100)
-                except: pass
+                except: 
+                    pass
 
         except Exception:
             error_details = traceback.format_exc()
@@ -15757,3 +15791,5 @@ if __name__ == "__main__":
     except Exception:
         traceback.print_exc()
         sys.exit(1)
+
+
