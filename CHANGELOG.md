@@ -1,11 +1,11 @@
 # Änderungen für oscam_patch_manager.py
-Letzte Aktualisierung: 23.06.2026 15:28
+Letzte Aktualisierung: 23.06.2026 18:37
 
 ---
 
 ## 🔧 Änderungen am Script
 
-* Update version to 5.5.0 and improve sound handling (485e518)
+
 ---
 
 ## 📊 Aktueller Tool-Status
