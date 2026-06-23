@@ -456,29 +456,54 @@ def check_and_install_dependencies(required_packages):
 
 
 # ===================== GLOBALE SOUND-SICHERHEIT=====================
+import glob
+import os
+import pwd
+import shutil
+import subprocess
+import platform
+
 HAS_PAPLAY = shutil.which("paplay") is not None
 
 
 def safe_play(sound_name):
-    """Spielt Sounds nur ab, wenn paplay existiert, sonst Beep."""
-    if platform.system() == "Linux":
-        # Nutzt die globale Variable HAS_PAPLAY, die oben gesetzt wurde
-        s_path = f"/usr/share/sounds/freedesktop/stereo/{sound_name}"
-        if HAS_PAPLAY and os.path.exists(s_path):
-            try:
-                subprocess.Popen(
-                    ["paplay", s_path],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                return
-            except:
-                pass
+    if platform.system() != "Linux":
+        return
 
-    # Fallback, wenn Linux ohne paplay oder Windows/Mac
-    from PyQt6.QtWidgets import QApplication
+    s_path = f"/usr/share/sounds/freedesktop/stereo/{sound_name}"
 
-    QApplication.beep()
+    if not (HAS_PAPLAY and os.path.exists(s_path)):
+        return
+
+    try:
+        # Normaler Benutzer
+        if os.geteuid() != 0:
+            subprocess.Popen(["paplay", s_path])
+            return
+
+        # Als Root -> aktiven Desktop-Benutzer suchen
+        for runtime in glob.glob("/run/user/*"):
+            uid = int(os.path.basename(runtime))
+
+            # Systembenutzer überspringen
+            if uid < 1000:
+                continue
+
+            user = pwd.getpwuid(uid).pw_name
+
+            env = os.environ.copy()
+            env["XDG_RUNTIME_DIR"] = runtime
+
+            subprocess.Popen(
+                ["runuser", "-u", user, "--", "paplay", s_path],
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return
+
+    except Exception as e:
+        print("safe_play:", e)
 
 
 import os
@@ -764,7 +789,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "5.3.0"
+APP_VERSION = "5.4.0"
 
 
 # ===================== PATCH DIRS =====================
@@ -15840,5 +15865,4 @@ if __name__ == "__main__":
     except Exception:
         traceback.print_exc()
         sys.exit(1)
-
 
