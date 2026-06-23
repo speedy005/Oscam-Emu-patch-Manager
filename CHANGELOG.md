@@ -1,20 +1,20 @@
 # Änderungen für oscam_patch_manager.py
-Letzte Aktualisierung: 23.06.2026 09:23
+Letzte Aktualisierung: 23.06.2026 11:05
 
 ---
 
 ## 🔧 Änderungen am Script
 
-
+* Update oscam_patch_manager.py (6c3b083)
 ---
 
 ## 📊 Aktueller Tool-Status
 
 ```text
-Traceback (most recent call last):
-  File "/home/runner/work/Oscam-Emu-patch-Manager/Oscam-Emu-patch-Manager/oscam_patch_manager.py", line 570, in <module>
-    from PyQt6.QtGui import QFont, QColor, QTextCursor, QIcon
-ModuleNotFoundError: No module named 'PyQt6'
+  File "/home/runner/work/Oscam-Emu-patch-Manager/Oscam-Emu-patch-Manager/oscam_patch_manager.py", line 8895
+    cmd_args = [git_bash, "--login", "-i", "-c", f"{exec_cmd_clean.replace('\\', '/')}; exec bash"]
+                                                                                                  ^
+SyntaxError: f-string expression part cannot include a backslash
 ⚠️ Tool-Ausführung fehlgeschlagen
 ```
 
