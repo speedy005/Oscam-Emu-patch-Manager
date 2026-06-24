@@ -9953,7 +9953,7 @@ class PatchManagerGUI(QWidget):
             # --- PLATTFORMÜBERGREIFENDER NEUSTART ---
             try:
                 python_exe = sys.executable
-                script_path = os.path.abspath(__file__)
+                script = os.path.realpath(sys.argv[0])
                 cmd_args = sys.argv[1:]
 
                 # Starte neuen Prozess
@@ -9965,10 +9965,16 @@ class PatchManagerGUI(QWidget):
                         shell=False,
                     )
                 else:
-                    subprocess.Popen([python_exe, script_path] + cmd_args)
+                    subprocess.Popen(
+                        [python_exe, script_path] + cmd_args,
+                        cwd=os.path.dirname(script_path),
+                        start_new_session=True if os.name != "nt" else False,
+                        close_fds=True
+                    )
 
                 # Beende aktuelle Instanz sauber
-                QTimer.singleShot(0, QApplication.quit)
+                QApplication.processEvents()
+                QTimer.singleShot(100, QApplication.quit)
             except Exception as e:
                 print(f"❌ Kritischer Fehler beim Neustart: {e}")
                 QApplication.quit()
