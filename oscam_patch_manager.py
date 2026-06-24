@@ -15766,23 +15766,8 @@ if __name__ == "__main__":
 
             main_window.setWindowTitle("OSCam Emu Patch Manager v4.0 - by speedy005")
 
-            # --- INTELLIGENTE AUFLÖSUNGS-LOGIK ---
-            if width > 1920:
-                # 4K Optimierung: 1080p Fenster zentrieren
-                main_window.resize(1920, 1080)
-                qr = main_window.frameGeometry()
-                cp = screen_geo.center()
-                qr.moveCenter(cp)
-                main_window.move(qr.topLeft())
-                main_window.show()
-                main_window.raise_()
-            else:
-                # FullHD oder kleiner: Maximiert darstellen
-                main_window.showMaximized()
-                main_window.show()     # FIX: Garantiert Sichtbarkeit auf allen Systemen
-                main_window.raise_()    # FIX: Erzwingt den Fokus in den Vordergrund
-
-            # =================================================================
+            main_window.showMaximized()
+            main_window.raise_
             # ERZWUNGENER NEUSTART-FIX: 
             # Sobald das Fenster nach dem Cinematic Splash erscheint, geben wir 
             # PyQt 100ms Zeit, die Buttons im Grafikspeicher zu verankern.
