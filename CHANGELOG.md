@@ -1,11 +1,11 @@
 # Änderungen für oscam_patch_manager.py
-Letzte Aktualisierung: 24.06.2026 16:56
+Letzte Aktualisierung: 24.06.2026 17:04
 
 ---
 
 ## 🔧 Änderungen am Script
 
-* Refactor window display logic in OSCam Patch Manager (67ede32)
+* Update oscam_patch_manager.py (6d8f543)
 ---
 
 ## 📊 Aktueller Tool-Status
