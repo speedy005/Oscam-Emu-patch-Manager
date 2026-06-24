@@ -4318,7 +4318,7 @@ from PyQt6.QtWidgets import QWidget, QVBoxLayout, QGridLayout, QLabel, QProgress
 class CinematicMatrixSplash(QWidget):
     finished = pyqtSignal()
 
-    def __init__(self, duration=4000): # Auf 4 Sek gesetzt für schnelleres Testen
+    def __init__(self, duration=4000):
         super().__init__()
         self.is_closing = False
         self.os_type = platform.system()
@@ -4328,27 +4328,48 @@ class CinematicMatrixSplash(QWidget):
         
         self.setWindowFlags(Qt.WindowType.SplashScreen | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.resize(1000, 650)
+        
+        self.setFixedSize(1020, 880)
 
-        # Zentriert das Fenster auf dem Bildschirm
         screen = QApplication.primaryScreen().geometry()
-        self.move((screen.width() - self.width()) // 2, (screen.height() - self.height()) // 2)
+        self.move(
+            screen.x() + (screen.width() - self.width()) // 2,
+            screen.y() + (screen.height() - self.height()) // 2
+        )
 
         self.logo_text = [
-            r" ◢◤━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◥◣ ",
-            r" █  _______  _______  _______  _______  __   __             █ ",
-            r" █ |       ||       ||   _   ||       ||  |_|  |            █ ",
-            r" █ |   _   ||  _____||  |_|  ||       ||       |            █ ",
-            r" █ |  | |  || |_____ |       ||       ||       |            █ ",
-            r" █ |  |_|  ||_____  ||       ||      _||       |            █ ",
-            r" █ |       | _____| ||   _   ||     |_ | ||_|| |            █ ",
-            r" █ |_______||_______||__| |__||_______||_|   |_|            █ ",
-            r" █                                                          █ ",
-            r" █─────────── [ SYSTEM: NEURAL_LINK OPERATIONAL ] ──────────█ ",
-            r" █            >> OSCAM EMU PATCH MANAGER v5.4.0 <<            █ ",
-            r" █            >> CODENAME: SPEEDY_Oscam-_Patch_Manager   <<            █ ",
-            r" ◥◣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◢◤ "
-        ]
+        r" ◢◤━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◥◣ ",
+        r" █               _______  _______  _______  _______  __   __              █ ",
+        r" █             |       ||       ||   _   ||       ||  |_|  |              █ ",
+        r" █             |   _   ||  _____||  |_|  ||       ||       |              █ ",
+        r" █             |  | |  || |_____ |       ||       ||       |              █ ",
+        r" █             |  |_|  ||_____  ||       ||      _||       |              █ ",
+        r" █             |       | _____| ||   _   ||     |_ | ||_|| |              █ ",
+        r" █             |_______||_______||__| |__||_______||_|   |_|              █ ",
+        r" █                                                                        █ ",
+        r" █               _______  _______  _______  _______  __   __              █ ",
+        r" █             |       ||   _   ||       ||       ||  | |  |              █ ",
+        r" █             |    ___||  |_|  ||_     _||       ||  |_|  |              █ ",
+        r" █             |   |___ |       |  |   |  |       ||       |              █ ",
+        r" █             |    ___||       |  |   |  |      _||       |              █ ",
+        r" █             |   |    |   _   |  |   |  |     |_ | ||_|| |              █ ",
+        r" █             |___|    |__| |__|  |___|  |_______||_|   |_|              █ ",
+        r" █                                                                        █ ",
+        r" █   __   __  _______  __    _  _______  _______  _______  ______         █ ",
+        r" █  |  |_|  ||   _   ||  |  | ||   _   ||     __||    ___||    _ |        █ ",
+        r" █  |       ||  |_|  ||   |_| ||  |_|  ||    |  ||   |___ |   | ||        █ ",
+        r" █  |       ||       ||       ||       ||    |  ||    ___||   |_||_       █ ",
+        r" █  |       ||       ||  _    ||       ||    |  ||   |___ |    __  |      █ ",
+        r" █  | ||_|| ||   _   || | |   ||   _   ||    |__||   |___ |   |  | |      █ ",
+        r" █  |_|   |_||__| |__||_|  |__||__| |__||_______||_______||___|  |_|      █ ",
+        r" █                                                                        █ ",
+        r" █──────────────────[ SYSTEM: NEURAL_LINK OPERATIONAL ]───────────────────█ ",
+        r" █                   >> OSCAM EMU PATCH MANAGER v5.4.0 <<                 █ ",
+        r" █             >> CODENAME: Speedy_Oscam-_Patch_Manager 2026 <<           █ ",
+        r" ◥◣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◢◤ "
+    ]
+
+
 
         self.chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$%&*+=-"
         self.columns = self.width() // 15
@@ -4357,22 +4378,12 @@ class CinematicMatrixSplash(QWidget):
         main_grid = QGridLayout(self)
         main_grid.setContentsMargins(0, 0, 0, 0)
 
-        self.bg_widget = QWidget()
-        self.bg_widget.setStyleSheet("background: transparent;")
-        main_grid.addWidget(self.bg_widget, 0, 0)
-
         self.ui_container = QWidget()
-        self.ui_container.setStyleSheet("""
-            QWidget {
-                background-color: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:1, 
-                                  stop:0 rgba(0, 8, 4, 230), stop:1 rgba(0, 20, 8, 245));
-                border: 1px solid rgba(0, 255, 65, 80);
-                border-radius: 12px;
-            }
-        """)
+        # WICHTIG: Komplett transparent geschaltet, damit die Zeichnung darunter sichtbar wird
+        self.ui_container.setStyleSheet("background: transparent; border: none;")
         
         ui_layout = QVBoxLayout(self.ui_container)
-        ui_layout.setContentsMargins(40, 40, 40, 40)
+        ui_layout.setContentsMargins(35, 30, 35, 30)
         
         header_layout = QHBoxLayout()
         self.lbl_terminal_title = QLabel("[ CORE_INIT_SEQUENCE ]")
@@ -4388,11 +4399,22 @@ class CinematicMatrixSplash(QWidget):
         header_layout.addWidget(self.lbl_hardware)
         ui_layout.addLayout(header_layout)
         
-        ui_layout.addStretch(2)
+        ui_layout.addStretch(1)
         
         self.lbl_logo = QLabel("\n".join(self.logo_text))
-        self.lbl_logo.setFont(QFont("Consolas", 10, QFont.Weight.Bold))
-        self.lbl_logo.setStyleSheet("color: #00FF41; background: transparent; border: none;")
+        font_logo = QFont("Consolas", 10, QFont.Weight.Bold)
+        font_logo.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 100)
+        self.lbl_logo.setFont(font_logo)
+        
+        self.lbl_logo.setStyleSheet("""
+            QLabel {
+                color: #00FF41; 
+                background: transparent; 
+                border: none;
+                white-space: pre;
+                line-height: 100%;
+            }
+        """)
         self.lbl_logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ui_layout.addWidget(self.lbl_logo)
         
@@ -4446,6 +4468,7 @@ class CinematicMatrixSplash(QWidget):
         self.corner_anim.start()
 
         QTimer.singleShot(duration, self.finish_anim)
+
 
     @pyqtProperty(float)
     def corner_factor(self): return self._corner_factor
