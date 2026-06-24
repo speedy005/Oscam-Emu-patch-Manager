@@ -5,7 +5,7 @@ Letzte Aktualisierung: 24.06.2026 16:44
 
 ## 🔧 Änderungen am Script
 
-* Update app version and refactor splash screen layout (9b91ad5)
+
 ---
 
 ## 📊 Aktueller Tool-Status
