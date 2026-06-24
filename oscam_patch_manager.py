@@ -789,7 +789,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "6.0.0"
+APP_VERSION = "6.1.0"
 
 
 # ===================== PATCH DIRS =====================
@@ -9968,8 +9968,7 @@ class PatchManagerGUI(QWidget):
                     subprocess.Popen([python_exe, script_path] + cmd_args)
 
                 # Beende aktuelle Instanz sauber
-                QApplication.instance().quit()
-                sys.exit(0)
+                QTimer.singleShot(0, QApplication.quit)
             except Exception as e:
                 print(f"❌ Kritischer Fehler beim Neustart: {e}")
                 QApplication.quit()
@@ -10043,13 +10042,13 @@ class PatchManagerGUI(QWidget):
 
         # PFAD-FIX für Windows (Leerzeichen in 'Program Files' etc.)
         python = sys.executable
-        script = os.path.abspath(sys.argv[0]) # Nutzt sys.argv[0] für den korrekten Skript-Einstiegspunkt
+        script = os.path.realpath(sys.argv[0]) # Nutzt sys.argv[0] für den korrekten Skript-Einstiegspunkt
 
         # Subprocess mit Liste verhindert das Abschneiden des Pfades
-        subprocess.Popen([python, script] + sys.argv[1:])
-
-        QApplication.quit()
-        sys.exit(0)
+        subprocess.Popen(
+            [python, script] + sys.argv[1:],
+            cwd=os.path.dirname(script)
+        )
 
     # ===================== ZIP PATCH =====================
     def zip_patch(self, info_widget=None, progress_callback=None):
