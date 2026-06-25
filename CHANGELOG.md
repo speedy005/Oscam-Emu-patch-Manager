@@ -1,11 +1,11 @@
 # Änderungen für oscam_patch_manager.py
-Letzte Aktualisierung: 24.06.2026 17:16
+Letzte Aktualisierung: 25.06.2026 02:58
 
 ---
 
 ## 🔧 Änderungen am Script
 
-* Update restart logic in oscam_patch_manager.py (2130e87)
+
 ---
 
 ## 📊 Aktueller Tool-Status
