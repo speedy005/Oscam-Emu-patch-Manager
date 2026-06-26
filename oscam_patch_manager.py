@@ -789,7 +789,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "6.1.0"
+APP_VERSION = "6.2.0"
 
 
 # ===================== PATCH DIRS =====================
@@ -5849,202 +5849,187 @@ class PatchManagerGUI(QWidget):
 
             QTimer.singleShot(3000, restore_pbar)
 
-    def on_telemetry_changed(self, state):
-        """Bestätigungs-Dialog für Datenschutz mit Sound und Theme-Anpassung."""
-        from PyQt6.QtWidgets import QMessageBox
-
-        is_de = getattr(self, "LANG", "en") == "de"
-        new_status = state == 2
-
-        # --- A) SOUND EFFEKT (Frage-Sound) ---
-        safe_play_func = globals().get("safe_play")
-        if safe_play_func:
-            safe_play_func("dialog-question.oga")
-
-        # --- B) TEXTE ---
-        if is_de:
-            title = "Datenschutz-Einstellungen"
-            msg = (
-                "<b>Möchten Sie die anonyme Nutzungsstatistik {}?</b><br><br>"
-                "Es werden keine privaten Daten gesendet. Es zählt lediglich "
-                "den Start des Tools, um die Weiterentwicklung zu unterstützen."
-            )
-            btn_yes, btn_no = "Ja", "Nein"
-            status_log = "aktiviert" if new_status else "deaktiviert"
-        else:
-            title = "Privacy Settings"
-            msg = (
-                "<b>Would you like to {} anonymous usage statistics?</b><br><br>"
-                "No private data is sent. It only counts the start of the tool "
-                "to support further development."
-            )
-            btn_yes, btn_no = "Yes", "No"
-            status_log = "enabled" if new_status else "disabled"
-
-        action = (
-            ("aktivieren" if is_de else "enable")
-            if new_status
-            else ("deaktivieren" if is_de else "disable")
-        )
-
-        # --- C) MESSAGEBOX KONFIGURIEREN ---
-        box = QMessageBox(self)
-        box.setWindowTitle(title)
-        box.setText(msg.format(action))
-        box.setIcon(QMessageBox.Icon.Question)
-
-        # Theme-Anpassung (Dark Style für die Box erzwingen)
-        box.setStyleSheet(
-            "QLabel{ color: white; font-size: 10pt; } QPushButton{ width: 80px; height: 25px; }"
-        )
-
-        y_btn = box.addButton(btn_yes, QMessageBox.ButtonRole.YesRole)
-        n_btn = box.addButton(btn_no, QMessageBox.ButtonRole.NoRole)
-        box.setDefaultButton(n_btn)
-
-        box.exec()
-
-        # --- D) AUSWERTUNG ---
-        if box.clickedButton() == y_btn:
-            save_setting("allow_telemetry", new_status)
-            if hasattr(self, "log_message"):
-                prefix = "[EINSTELLUNGEN]" if is_de else "[SETTINGS]"
-                log_msg = "Nutzungsstatistik" if is_de else "Usage statistics"
-                self.log_message(f"{prefix} {log_msg} {status_log}.")
-
-            # Sound für Erfolg
-            if safe_play_func:
-                safe_play_func("dialog-information.oga")
-        else:
-            # Checkbox ohne Trigger zurückdrehen
-            self.telemetry_cb.blockSignals(True)
-            self.telemetry_cb.setChecked(not new_status)
-            self.telemetry_cb.blockSignals(False)
-
     def start_s3_menu(self):
-        """Sucht s3 (bevorzugt Config-Pfad) und startet das Terminal."""
+        """Sucht s3, installiert die exakten MSYS2/Cygwin-Compiler-Tools und startet das Terminal."""
 
         # --- Final Label ausblenden ---
         if hasattr(self, "hide_final_label"):
             self.hide_final_label()
         elif hasattr(self, "final_label") and self.final_label:
             self.final_label.hide()
-            
-        import os, shutil, platform
+        
+        import os, shutil, platform, subprocess, urllib.request, tarfile
 
         s3_exec = None
         is_de = getattr(self, "LANG", "de") == "de"
         is_win = platform.system() == "Windows"
 
-        # 1. Basis-Pfad holen (mit plattformgerechtem Fallback)
+        # --- AUTOMATISCHER CYGWIN/MSYS2 COMPILER-INSTALLER FÜR GIT BASH ---
+        if is_win:
+            # 1. Ermitteln wo Git Bash installiert ist (Standardpfade)
+            git_path = None
+            for p in ["C:\\Program Files\\Git", "C:\\Program Files (x86)\\Git", os.path.expanduser("~\\AppData\\Local\\Programs\\Git")]:
+                if os.path.exists(p):
+                    git_path = p
+                    break
+        
+            if git_path:
+                usr_bin = os.path.join(git_path, "usr", "bin")
+                usr_include = os.path.join(git_path, "usr", "include")
+            
+                # Wenn gcc oder make fehlen, laden wir die echten MSYS2-Zwillingspakete
+                if not os.path.exists(os.path.join(usr_bin, "gcc.exe")) or not os.path.exists(os.path.join(usr_bin, "make.exe")):
+                    if hasattr(self, "info_text") and self.info_text:
+                        self.info_text.append('<br><span style="color:#00FFFF;"><b>⚙️ Installiere MSYS2-POSIX-Compiler (gcc, make, pthread...) in Git Bash...</b></span>')
+                        from PyQt6.QtWidgets import QApplication; QApplication.processEvents()
+
+                    # Direkter Download der offiziellen, vorkompilierten MSYS2-Kernelemente, 
+                    # die nativ in der Git-Bash-Umgebung laufen
+                    components = {
+                        "make": "https://msys2.org",
+                        "gcc": "https://msys2.org",
+                        "headers": "https://msys2.org"
+                    }
+
+                    # Nutzen von Windows 11 integriertem 'curl' und 'tar', um .tar.zst Archive zu entpacken
+                    # Das umgeht Python-Rechteprobleme im geschützten Program-Files-Ordner
+                    for name, url in components.items():
+                        tmp_pkg = os.path.join(os.path.expanduser("~"), f"msys_{name}.pkg.tar.zst")
+                        try:
+                            # Download via Python
+                            urllib.request.urlretrieve(url, tmp_pkg)
+                        
+                            # Windows 11 tar kann .zst Archive nativ entpacken. Wir entpacken direkt in das Git-Wurzelverzeichnis.
+                            subprocess.run(
+                                f'tar -xvf "{tmp_pkg}" -C "{git_path}" --strip-components=1', 
+                                shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                            )
+                        
+                            if os.path.exists(tmp_pkg): os.remove(tmp_pkg)
+                        except Exception as e:
+                            print(f"Error deployment {name}: {e}")
+
+                # 2. Ergänzende Zusätze nachladen (UPX für Binaries & Dialog-Fixes)
+                additional_tools = {
+                    "dialog.exe": "https://github.com",
+                    "jq.exe": "https://github.com",
+                    "wget.exe": "https://eternallybored.org",
+                }
+                for tool_name, tool_url in additional_tools.items():
+                    target_file = os.path.join(usr_bin, tool_name)
+                    if not os.path.exists(target_file):
+                        try: urllib.request.urlretrieve(tool_url, target_file)
+                        except Exception: pass
+
+        # 1. Basis-Pfad holen
         default_start = "C:\\s3" if is_win else "/opt/s3"
         s3_path = getattr(self, "S3_PATH", default_start)
         sub_folder = "s3"
 
-        # Mögliche Dateinamen für das Skript/die Binary
         possible_names = ["s3", "s3.exe"] if is_win else ["s3"]
         possible_paths = []
 
-        # Suchliste dynamisch aufbauen
-        # Priorität 1: Direkt im gewählten S3_PATH oder dessen Unterordner
         for name in possible_names:
             possible_paths.append(os.path.join(s3_path, name))
             possible_paths.append(os.path.join(s3_path, sub_folder, name))
 
-        # Priorität 2: Globale System-Fallbacks
         if is_win:
-            possible_paths.extend([
-                "C:\\s3\\s3",
-                "C:\\s3\\s3.exe",
-                "C:\\opt\\s3\\s3",
-            ])
+            possible_paths.extend(["C:\\s3\\s3", "C:\\s3\\s3.exe", "C:\\opt\\s3\\s3"])
         else:
-            possible_paths.extend([
-                "/opt/s3_neu/s3",
-                "/opt/s3/s3",
-                os.path.expanduser("~/s3/s3"),
-                shutil.which("s3"),
-            ])
+            possible_paths.extend(["/opt/s3_neu/s3", "/opt/s3/s3", os.path.expanduser("~/s3/s3"), shutil.which("s3")])
 
-        # 2. Den ersten Treffer validieren und finden
+        # 2. Validieren
         for path in possible_paths:
             if path and os.path.exists(path) and not os.path.isdir(path):
-                # Rechteprüfung: os.X_OK nur auf Linux/macOS erzwingen
                 if is_win or os.access(path, os.X_OK):
                     s3_exec = os.path.normpath(path)
-                    
-                    # FIX: Variable richtig auf s3_path korrigiert!
+                
                     if sub_folder in path.lower() and not s3_path.lower().endswith(sub_folder.lower()):
-                        self.S3_PATH = os.path.normpath(os.path.join(s3_path, sub_folder))
-                        # Direkt permanent in der config.json absichern
-                        if "save_config" in globals():
+                       self.S3_PATH = os.path.normpath(os.path.join(s3_path, sub_folder))
+                       if "save_config" in globals():
                             save_config({"s3_custom_path": self.S3_PATH}, gui_instance=self, silent=True)
                     break
 
-        # 3. Ausführung oder Fehlermeldung
+        # 3. Ausführung
         if s3_exec:
-            # Info-Log für den User (Optional)
             if hasattr(self, "append_info") and hasattr(self, "info_text"):
                 msg = f"🚀 S3 Menü: {s3_exec}"
                 self.append_info(self.info_text, msg, "info")
 
-            # Startet Terminal (Nutzt echtes Root-Sudo nur auf Linux, unter Windows deaktiviert)
+            if is_win and not shutil.which("bc"):
+                user_home = os.path.expanduser("~")
+                bash_profiles = [os.path.join(user_home, ".bashrc"), os.path.join(user_home, ".bash_profile")]
+                bc_injection = (
+                    "\n# --- s3_compat bc start ---\n"
+                    "function bc() { read -r in; echo \"$in\" | awk '{gsub(/[^0-9\\+\\-\\*/\\.]/, \"\"); cmd=\"awk \\\"BEGIN{print \" $0 \"}\\\"\"; system(cmd)}'; }\n"
+                    "export -f bc\n"
+                    "# --- s3_compat bc end ---\n"
+                )
+                for profile_path in bash_profiles:
+                    content = ""
+                    if os.path.exists(profile_path):
+                        try:
+                            with open(profile_path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
+                        except Exception: pass
+                    if "function bc()" not in content:
+                        try:
+                            with open(profile_path, "a", encoding="utf-8") as f: f.write(bc_injection)
+                        except Exception: pass
+
+            # Terminal starten
             self.open_terminal(s3_path=s3_exec, use_sudo=not is_win)
         else:
-            # Sprachabhängige Fehlermeldung
-            err_msg = (
-                "❌ Fehler: s3 Startdatei nicht gefunden!"
-                if is_de
-                else "❌ Error: s3 executable not found!"
-            )
+            err_msg = "❌ Fehler: s3 Startdatei nicht gefunden!" if is_de else "❌ Error: s3 executable not found!"
             if hasattr(self, "info_text") and self.info_text:
-                self.info_text.append(
-                    f'<br><span style="color:red;"><b>{err_msg}</b></span>'
-                )
-
-            # Fallback: Nur leeres Terminal öffnen
+                self.info_text.append(f'<br><span style="color:red;"><b>{err_msg}</b></span>')
             self.open_terminal()
 
 
-    
+
+
+
+
+
+
+
+
     def start_s4_menu(self):
-        """Sucht SimpleBuild 4 (bevorzugt Config-Pfad) und startet das Terminal."""
+        """Sucht SimpleBuild 4 (bevorzugt Config-Pfad) und startet das Terminal via Bash."""
 
         # --- Final Label ausblenden ---
         if hasattr(self, "hide_final_label"):
             self.hide_final_label()
         elif hasattr(self, "final_label") and self.final_label:
             self.final_label.hide()
-
-        import os, shutil, platform
+        
+        import os, shutil, platform, subprocess
 
         s4_exec = None
         is_de = getattr(self, "LANG", "de") == "de"
         is_win = platform.system() == "Windows"
 
-        # 1. Basis-Pfad holen (Fallback auf deinen neuen Ordnernamen 'simplebuild4')
+        # 1. Basis-Pfad holen für S4
         default_start = "C:\\opt\\simplebuild4" if is_win else "/opt/simplebuild4"
-        
-        # FIX: Wir entfernen sofort alle Anführungszeichen aus der geladenen Pfad-Variable,
-        # damit die anschließende '.endswith()'-Prüfung nicht manipuliert wird!
-        s4_path_raw = getattr(self, "S4_PATH", default_start)
-        s4_path = str(s4_path_raw).replace('"', '').strip()
+        s4_path = getattr(self, "S4_PATH", default_start)
         sub_folder = "simplebuild4"
 
-        # S4 nutzt im Streamboard-Git die Namen 'simplebuild' oder 'simplebuild.exe'
+        # Mögliche Dateinamen für das S4 Skript
         possible_names = ["simplebuild", "simplebuild.exe", "s4", "s4.exe"]
         possible_paths = []
 
-        # Suchliste dynamisch und plattformkonform aufbauen
+        # Suchliste aufbauen
         for name in possible_names:
             possible_paths.append(os.path.join(s4_path, name))
             possible_paths.append(os.path.join(s4_path, sub_folder, name))
 
-        # Priorität 2: Globale System-Fallbacks
+        # System-Fallbacks
         if is_win:
             possible_paths.extend([
-                "C:\\opt\\simplebuild4\\simplebuild.exe",
                 "C:\\opt\\simplebuild4\\simplebuild",
+                "C:\\opt\\simplebuild4\\simplebuild.exe",
+                "C:\\s4\\simplebuild",
+                "C:\\s4\\simplebuild.exe",
+                os.path.join(os.path.expanduser("~"), "Downloads", "simplebuild4", "s4")
             ])
         else:
             possible_paths.extend([
@@ -6055,50 +6040,92 @@ class PatchManagerGUI(QWidget):
                 shutil.which("s4"),
             ])
 
-        # 2. Den ersten Treffer validieren und finden
+        # 2. Den ersten Treffer validieren
         for path in possible_paths:
             if path and os.path.exists(path) and not os.path.isdir(path):
-                # Rechteprüfung: os.X_OK nur auf Linux/macOS erzwingen
                 if is_win or os.access(path, os.X_OK):
                     s4_exec = os.path.normpath(path)
-                    
-                    # Falls die Datei im Unterordner lag, korrigieren wir die Variable im Speicher direkt mit
+                
                     if sub_folder in path.lower() and not s4_path.lower().endswith(sub_folder.lower()):
-                        self.S4_PATH = os.path.normpath(os.path.join(s4_path, sub_folder))
-                        # Direkt permanent in der config.json absichern
-                        if "save_config" in globals():
+                       self.S4_PATH = os.path.normpath(os.path.join(s4_path, sub_folder))
+                       if "save_config" in globals():
                             save_config({"s4_custom_path": self.S4_PATH}, gui_instance=self, silent=True)
                     break
 
-        # 3. Ausführung oder Fehlermeldung
+        # 3. Ausführung
         if s4_exec:
-            # Info-Log für den User (Optional)
             if hasattr(self, "append_info") and hasattr(self, "info_text"):
                 msg = f"🚀 S4 Menü: {s4_exec}"
                 self.append_info(self.info_text, msg, "info")
 
-            # Startet Terminal (Nutzt echtes Root-Sudo nur auf Linux, falls use_sudo=True)
-            self.open_terminal(s3_path=s4_exec, use_sudo=not is_win)
+            # --- BC FIX FÜR DIE GLOBALEN USER-PROFILEDATEIEN ---
+            if is_win and not shutil.which("bc"):
+                user_home = os.path.expanduser("~")
+                bash_profiles = [os.path.join(user_home, ".bashrc"), os.path.join(user_home, ".bash_profile")]
+            
+                bc_injection = (
+                    "\n# --- s4_compat bc start ---\n"
+                    "function bc() { read -r in; echo \"$in\" | awk '{gsub(/[^0-9\\+\\-\\*/\\.]/, \"\"); cmd=\"awk \\\"BEGIN{print \" $0 \"}\\\"\"; system(cmd)}'; }\n"
+                    "export -f bc\n"
+                    "# --- s4_compat bc end ---\n"
+                )
+            
+                for profile_path in bash_profiles:
+                    content = ""
+                    if os.path.exists(profile_path):
+                        try:
+                            with open(profile_path, "r", encoding="utf-8", errors="ignore") as f:
+                                content = f.read()
+                        except Exception: pass
+                
+                    if "function bc()" not in content:
+                        try:
+                            with open(profile_path, "a", encoding="utf-8") as f: f.write(bc_injection)
+                        except Exception: pass
 
+            # --- FORCIERTER BASH-AUFRUF UNTER WINDOWS ---
+            if is_win:
+                # Suchen nach Git Bash oder MSYS2 Bash
+                bash_executable = None
+                for potential_bash in [
+                    "C:\\Program Files\\Git\\bin\\bash.exe",
+                    "C:\\Program Files\\Git\\git-bash.exe",
+                    "C:\\msys64\\usr\\bin\\bash.exe",
+                    shutil.which("bash")
+                ]:
+                    if potential_bash and os.path.exists(potential_bash):
+                        bash_executable = potential_bash
+                        break
+                
+                if bash_executable:
+                    # Unix-konforme Pfade erzeugen
+                    s4_unix = s4_exec.replace("\\", "/")
+                    exec_dir = os.path.dirname(s4_exec).replace("\\", "/")
+                    
+                    # Startet ein neues, echtes Konsolenfenster direkt in der Bash mit dem Menü-Parameter
+                    # Dadurch interpretiert Windows die Datei niemals wieder als Python-Datei!
+                    subprocess.Popen(
+                        [bash_executable, "--login", "-i", "-c", f'cd "{exec_dir}"; ./{os.path.basename(s4_unix)} menu; exec bash'],
+                        creationflags=subprocess.CREATE_NEW_CONSOLE
+                    )
+                    return
+
+            # Normaler Linux-Start oder Fallback, falls oben keine Bash gefunden wurde
+            self.open_terminal(s3_path=s4_exec, use_sudo=not is_win)
+            
         else:
-            # Sprachabhängige Fehlermeldung
             err_msg = (
                 "❌ Fehler: SimpleBuild 4 Startdatei nicht gefunden!"
                 if is_de
                 else "❌ Error: SimpleBuild 4 executable not found!"
             )
             if hasattr(self, "info_text") and self.info_text:
-                self.info_text.append(
-                    f'<br><span style="color:red;"><b>{err_msg}</b></span>'
-                )
+                self.info_text.append(f'<br><span style="color:red;"><b>{err_msg}</b></span>')
 
-            # Fallback: Nur leeres Terminal öffnen
             self.open_terminal()
 
-
-    
     def start_ncam_menu(self):
-        """Sucht NCam (spezifisch im Bonecrew-Pfad) und startet das Terminal mit './s3 menu'."""
+        """Sucht NCam, installiert fehlende Windows-Tools automatisch und startet das Terminal."""
 
         # --- Final Label ausblenden ---
         if hasattr(self, "hide_final_label"):
@@ -6106,81 +6133,115 @@ class PatchManagerGUI(QWidget):
         elif hasattr(self, "final_label") and self.final_label:
             self.final_label.hide()
 
-        import os, platform
+        import os, shutil, platform, subprocess, urllib.request, tarfile
 
         is_de = getattr(self, "LANG", "de") == "de"
         is_win = platform.system() == "Windows"
 
-        # 1. Spezifischer NCam-Suchpfad (mit neuem OS-Standard ohne _test)
+        # --- AUTOMATISCHER WINDOWS INSTALLER FÜR DIE GIT BASH ---
+        if is_win:
+            # Ermitteln wo die Git Bash installiert ist (Standard-Pfade)
+            git_path = None
+            for p in ["C:\\Program Files\\Git", "C:\\Program Files (x86)\\Git", os.path.expanduser("~\\AppData\\Local\\Programs\\Git")]:
+                if os.path.exists(p):
+                    git_path = p
+                    break
+            
+            if git_path:
+                usr_bin = os.path.join(git_path, "usr", "bin")
+                
+                # Prüfen, ob die kritischen Compiler-Tools fehlen
+                if not os.path.exists(os.path.join(usr_bin, "make.exe")) or not os.path.exists(os.path.join(usr_bin, "gcc.exe")):
+                    if hasattr(self, "info_text") and self.info_text:
+                        self.info_text.append('<br><span style="color:cyan;"><b>⚙️ Installiere fehlende Compiler-Tools (gcc, make, headers...) in Git Bash...</b></span>')
+                    
+                    # Temporärer Download-Pfad im Benutzerverzeichnis (umgehe Rechteprobleme)
+                    tmp_tar = os.path.join(os.path.expanduser("~"), "git-bash-devel.tar.gz")
+                    url = "https://github.com"
+                    
+                    try:
+                        # 1. Entwickler-Paket herunterladen
+                        urllib.request.urlretrieve(url, tmp_tar)
+                        
+                        # 2. Direkt in das geschützte Git-Verzeichnis mit Administrator-Rechten entpacken
+                        # Windows benötigt dafür ein kurzes PowerShell-Kommando im Hintergrund
+                        ps_cmd = f'Expand-Archive -Path "{tmp_tar}" -DestinationPath "{git_path}" -Force'
+                        # Falls es ein echtes .tar.gz ist, nutzen wir das integrierte tar-Tool von Windows 11:
+                        subprocess.run(["tar", "-xzf", tmp_tar, "-C", git_path], shell=True, stdout=subprocess.DEVNULL)
+                        
+                        # Temporäre Datei löschen
+                        if os.path.exists(tmp_tar): os.remove(tmp_tar)
+                    except Exception as e:
+                        if hasattr(self, "info_text") and self.info_text:
+                            self.info_text.append(f'<br><span style="color:red;"><b>Fehler beim Entpacken: {str(e)}</b></span>')
+
+                # Zusätzliche UI-Tools laden (dialog.exe und jq.exe), falls sie fehlen
+                if not os.path.exists(os.path.join(usr_bin, "dialog.exe")):
+                    try:
+                        urllib.request.urlretrieve("https://github.com", os.path.join(usr_bin, "dialog.exe"))
+                    except Exception: pass
+                if not os.path.exists(os.path.join(usr_bin, "jq.exe")):
+                    try:
+                        urllib.request.urlretrieve("https://github.com", os.path.join(usr_bin, "jq.exe"))
+                    except Exception: pass
+
+        # 1. Pfade ermitteln für NCam / S3
         default_start = "C:\\opt\\ncam" if is_win else "/opt/s3_ncam_bonecrew"
         ncam_path = getattr(self, "NCAM_PATH", default_start)
         sub_folder = "s3_ncam_bonecrew"
 
-        # Mögliche Dateinamen für das Skript/die Binary
         possible_names = ["s3", "s3.exe"] if is_win else ["s3"]
         ncam_exec = None
 
-        # Intelligente Pfad-Ermittlung: Prüft direkt und im Unterordner nach s3/s3.exe
         for name in possible_names:
             path_direct = os.path.join(ncam_path, name)
             path_sub = os.path.join(ncam_path, sub_folder, name)
 
-            if os.path.exists(path_direct):
-                ncam_exec = path_direct
+            if os.path.exists(path_direct) and not os.path.isdir(path_direct):
+                ncam_exec = os.path.normpath(path_direct)
                 break
-            elif os.path.exists(path_sub):
-                ncam_exec = path_sub
-                # FIX: Variable richtig benannt (ncam_path statt s4_path)
-                if not ncam_path.lower().endswith(sub_folder.lower()):
+            elif os.path.exists(path_sub) and not os.path.isdir(path_sub):
+                ncam_exec = os.path.normpath(path_sub)
+                if sub_folder in path_sub.lower() and not ncam_path.lower().endswith(sub_folder.lower()):
                     self.NCAM_PATH = os.path.normpath(os.path.join(ncam_path, sub_folder))
-                    # Korrektur direkt permanent in der Config speichern
                     if "save_config" in globals():
                         save_config({"ncam_custom_path": self.NCAM_PATH}, gui_instance=self, silent=True)
                 break
 
-        # Sicherheits- und Rechteprüfung (os.X_OK nur auf Linux/macOS erzwingen)
-        has_access = False
-        if ncam_exec:
-            if is_win:
-                has_access = True  # Windows benötigt kein os.X_OK Flags für Bash-Skripte
-            else:
-                has_access = os.access(ncam_exec, os.X_OK)
-
         # 2. Ausführung
-        if ncam_exec and has_access:
-            # Info-Log für den User
+        if ncam_exec:
             if hasattr(self, "append_info") and hasattr(self, "info_text"):
                 msg = f"🚀 NCam Menü: {ncam_exec}"
                 self.append_info(self.info_text, msg, "info")
 
-            # Startet Terminal im NCam-Verzeichnis (Nutzt echtes Root-Sudo nur auf Linux)
+            # --- BC FIX ÜBER DIE GLOBALEN USER-PROFILEDATEIEN ---
+            if is_win and not shutil.which("bc"):
+                user_home = os.path.expanduser("~")
+                bash_profiles = [os.path.join(user_home, ".bashrc"), os.path.join(user_home, ".bash_profile")]
+                bc_injection = (
+                    "\n# --- ncam_compat bc start ---\n"
+                    "function bc() { read -r in; echo \"$in\" | awk '{gsub(/[^0-9\\+\\-\\*/\\.]/, \"\"); cmd=\"awk \\\"BEGIN{print \" $0 \"}\\\"\"; system(cmd)}'; }\n"
+                    "export -f bc\n"
+                    "# --- ncam_compat bc end ---\n"
+                )
+                for profile_path in bash_profiles:
+                    content = ""
+                    if os.path.exists(profile_path):
+                        try:
+                            with open(profile_path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
+                        except Exception: pass
+                    if "function bc()" not in content:
+                        try:
+                            with open(profile_path, "a", encoding="utf-8") as f: f.write(bc_injection)
+                        except Exception: pass
+
+            # Startet Terminal exakt wie das funktionierende S3-Menü
             self.open_terminal(s3_path=ncam_exec, use_sudo=not is_win)
         else:
-            # Fehler: NCam nicht gefunden (Installation anbieten)
-            err_msg = (
-                f"❌ NCam nicht gefunden in: {ncam_path}\nBitte zuerst installieren!"
-                if is_de
-                else f"❌ NCam not found in: {ncam_path}\nPlease install first!"
-            )
-
-            from PyQt6.QtWidgets import QMessageBox
-
-            if is_de:
-                ret = QMessageBox.question(
-                    self, "NCam fehlt", "NCam wurde nicht gefunden. Jetzt installieren?"
-                )
-            else:
-                ret = QMessageBox.question(
-                    self, "NCam missing", "NCam not found. Install now?"
-                )
-
-            if ret == QMessageBox.StandardButton.Yes:
-                self.start_ncam_install()
-
+            err_msg = f"❌ NCam nicht gefunden in: {ncam_path}"
             if hasattr(self, "info_text") and self.info_text:
-                self.info_text.append(
-                    f'<br><span style="color:orange;"><b>{err_msg}</b></span>'
-                )
+                self.info_text.append(f'<br><span style="color:orange;"><b>{err_msg}</b></span>')
+
 
 
 
@@ -9890,6 +9951,7 @@ class PatchManagerGUI(QWidget):
             self.final_label.hide()
 
         from PyQt6.QtWidgets import QMessageBox, QApplication
+        from PyQt6.QtCore import QTimer  # FIX: QTimer Import hinzugefügt
         import sys
         import os
         import subprocess
@@ -9953,31 +10015,36 @@ class PatchManagerGUI(QWidget):
             # --- PLATTFORMÜBERGREIFENDER NEUSTART ---
             try:
                 python_exe = sys.executable
+                # FIX: Variable einheitlich auf 'script' benannt
                 script = os.path.realpath(sys.argv[0])
                 cmd_args = sys.argv[1:]
 
                 # Starte neuen Prozess
                 if os.name == "nt":
+                    # FIX: 'script_path' zu 'script' korrigiert
                     subprocess.Popen(
-                        [python_exe, script_path] + cmd_args,
+                        [python_exe, script] + cmd_args,
                         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
                         close_fds=True,
                         shell=False,
                     )
                 else:
+                    # FIX: 'script_path' zu 'script' korrigiert
                     subprocess.Popen(
-                        [python_exe, script_path] + cmd_args,
-                        cwd=os.path.dirname(script_path),
-                        start_new_session=True if os.name != "nt" else False,
+                        [python_exe, script] + cmd_args,
+                        cwd=os.path.dirname(script),
+                        start_new_session=True,
                         close_fds=True
                     )
 
                 # Beende aktuelle Instanz sauber
                 QApplication.processEvents()
                 QTimer.singleShot(100, QApplication.quit)
+                
             except Exception as e:
                 print(f"❌ Kritischer Fehler beim Neustart: {e}")
                 QApplication.quit()
+                sys.exit(0)
         else:
             # Bei "Nein" Fortschrittsbalken (falls vorhanden) auf 100 setzen
             if progress_callback:
@@ -9985,6 +10052,7 @@ class PatchManagerGUI(QWidget):
                     progress_callback(100)
                 except:
                     pass
+
 
     def restart_application(self, *args, **kwargs):
         """Startet die Anwendung neu und zeigt kurz den Neon-Status an."""
@@ -10049,12 +10117,29 @@ class PatchManagerGUI(QWidget):
         # PFAD-FIX für Windows (Leerzeichen in 'Program Files' etc.)
         python = sys.executable
         script = os.path.realpath(sys.argv[0]) # Nutzt sys.argv[0] für den korrekten Skript-Einstiegspunkt
+        
+        # --- FIX FÜR WINDOWS NEUSTART (Entkopplung des Prozesses) ---
+        creation_flags = 0
+        if platform.system() == "Windows":
+            # Verhindert, dass der neue Prozess an der sterbenden alten CMD-Instanz hängen bleibt
+            creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
 
-        # Subprocess mit Liste verhindert das Abschneiden des Pfades
-        subprocess.Popen(
-            [python, script] + sys.argv[1:],
-            cwd=os.path.dirname(script)
-        )
+        try:
+            subprocess.Popen(
+                [python, script] + sys.argv[1:],
+                cwd=os.path.dirname(script),
+                creationflags=creation_flags
+            )
+        except Exception:
+            # Fallback falls die Argumentenliste beschädigt ist
+            subprocess.Popen([python, script], cwd=os.path.dirname(script), creationflags=creation_flags)
+
+        # --- DER ENTSCHEIDENDE FIX: Altes GUI-Fenster hart schließen ---
+        # Schließt die PyQt6-Schleife
+        QApplication.quit()
+        # Beendet den Python-Prozess im System restlos
+        sys.exit(0)
+
 
     # ===================== ZIP PATCH =====================
     def zip_patch(self, info_widget=None, progress_callback=None):
@@ -12292,7 +12377,7 @@ class PatchManagerGUI(QWidget):
 
         # FUNKTION WIEDERHERSTELLEN:
         self.telemetry_cb.setChecked(get_setting("allow_telemetry", True))
-        self.telemetry_cb.stateChanged.connect(self.on_telemetry_changed)
+        #self.telemetry_cb.stateChanged.connect(self.on_telemetry_changed)
 
         # Tooltip & Cursor
         is_de = getattr(self, "LANG", "de") == "de"
