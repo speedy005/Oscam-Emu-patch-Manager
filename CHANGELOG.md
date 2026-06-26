@@ -5,7 +5,7 @@ Letzte Aktualisierung: 26.06.2026 10:55
 
 ## 🔧 Änderungen am Script
 
-
+* Update application version to 6.4.0 (e4bb32e)
 ---
 
 ## 📊 Aktueller Tool-Status
