@@ -1,17 +1,17 @@
 # Änderungen für oscam_patch_manager.py
-Letzte Aktualisierung: 26.06.2026 09:09
+Letzte Aktualisierung: 26.06.2026 10:27
 
 ---
 
 ## 🔧 Änderungen am Script
 
-
+* Update app version and enhance telemetry settings (586a620)
 ---
 
 ## 📊 Aktueller Tool-Status
 
 ```text
-  File "/home/runner/work/Oscam-Emu-patch-Manager/Oscam-Emu-patch-Manager/oscam_patch_manager.py", line 8890
+  File "/home/runner/work/Oscam-Emu-patch-Manager/Oscam-Emu-patch-Manager/oscam_patch_manager.py", line 8951
     cmd_args = [git_bash, "--login", "-i", "-c", f"{exec_cmd_clean.replace('\\', '/')}; exec bash"]
                                                                                                   ^
 SyntaxError: f-string expression part cannot include a backslash
