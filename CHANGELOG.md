@@ -5,7 +5,7 @@ Letzte Aktualisierung: 26.06.2026 10:27
 
 ## 🔧 Änderungen am Script
 
-* Update app version and enhance telemetry settings (586a620)
+
 ---
 
 ## 📊 Aktueller Tool-Status
