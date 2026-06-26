@@ -95,7 +95,6 @@ def ensure_pip():
         import ensurepip
         ensurepip.bootstrap()
 
-
 def install_python_packages():
     missing = []
     for p in REQUIRED_PACKAGES:
@@ -112,7 +111,6 @@ def install_python_packages():
 
     # Restart script after installing packages
     os.execv(sys.executable, [sys.executable] + sys.argv)
-
 
 def fix_windows_path():
     """Fügt Standard-Installationspfade bekannter Tools zum System-PATH hinzu (Windows)."""
@@ -138,7 +136,6 @@ def fix_windows_path():
     if added:
         os.environ["PATH"] = os.pathsep.join(added) + os.pathsep + path
 
-
 def check_tools():
     missing = []
     for t in REQUIRED_TOOLS:
@@ -147,13 +144,11 @@ def check_tools():
     if missing:
         print("Missing tools:", missing)
 
-
 def is_admin():
     try:
         return ctypes.windll.shell32.IsUserAnAdmin()
     except Exception:
         return False
-
 
 def raise_file_limit():
     """Erhöht das Limit für gleichzeitig geöffnete Dateien (Linux)."""
@@ -175,7 +170,6 @@ def raise_file_limit():
     except Exception as e:
         print(f"[WARNUNG] Konnte File-Limit nicht erhöhen: {e}")
 
-
 # ============================================================
 # SETTINGS
 # ============================================================
@@ -190,10 +184,8 @@ def load_settings():
         except Exception:
             _SETTINGS_CACHE = {}
 
-
 def get_setting(key, default=True):
     return _SETTINGS_CACHE.get(key, default)
-
 
 def save_setting(key, value):
     _SETTINGS_CACHE[key] = value
@@ -203,11 +195,9 @@ def save_setting(key, value):
     except Exception as e:
         print(f"Fehler beim Speichern: {e}")
 
-
 # ============================================================
 # FONT INSTALLER
 # ============================================================
-
 def auto_install_emoji_font():
     """Installiert Noto Color Emoji plattformübergreifend."""
     def _run_install():
@@ -252,7 +242,6 @@ def auto_install_emoji_font():
 
     threading.Thread(target=_run_install, daemon=True).start()
 
-
 # ============================================================
 # TOOL VERIFICATION
 # ============================================================
@@ -296,7 +285,6 @@ def verify_tools(tools_to_check):
             print(f"[!] {tool} Fehler: Start fehlgeschlagen.")
     return results
 
-
 # ============================================================
 # DEPENDENCIES & SOUND
 # ============================================================
@@ -321,7 +309,6 @@ def ensure_dependencies():
 
     return True
 
-
 # ============================================================
 # MAIN BOOTSTRAP
 # ============================================================
@@ -338,8 +325,6 @@ def bootstrap():
         raise_file_limit()
     print("[SYSTEM] Bootstrap abgeschlossen ✅")
     
-
-
 from datetime import datetime, timezone
 from PyQt6.QtGui import QFont, QColor, QTextCursor, QIcon
 from PyQt6.QtWidgets import (
@@ -368,7 +353,6 @@ from PyQt6.QtWidgets import QMessageBox
 
 from PyQt6.QtCore import QThread, pyqtSignal, QPropertyAnimation, QEasingCurve
 from PyQt6.QtWidgets import QGraphicsColorizeEffect
-
 
 class OSCamUpdateWorker(QThread):
     """Prüft im Hintergrund, ob im Streamboard-Git neue Commits vorliegen."""
@@ -412,7 +396,6 @@ class OSCamUpdateWorker(QThread):
             print(f"Update-Check Fehler: {e}")
             self.status_signal.emit(False, "")
 
-
 def check_and_install_dependencies(required_packages):
     missing_packages = []
     for pkg in required_packages:
@@ -453,7 +436,6 @@ def check_and_install_dependencies(required_packages):
             os.execv(sys.executable, [sys.executable] + sys.argv)
             return True
     return False
-
 
 # ===================== GLOBALE SOUND-SICHERHEIT=====================
 import glob
@@ -517,8 +499,6 @@ def safe_play(sound_name):
 
     except Exception as e:
         print("safe_play:", e)
-
-
 
 import os
 import shutil
@@ -680,9 +660,6 @@ class NcamBonecrewInstallWorker(QThread):
             if temp_clone and os.path.exists(temp_clone):
                 shutil.rmtree(temp_clone, ignore_errors=True)
 
-
-
-
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QApplication
 import os, platform, shutil, subprocess, tempfile
@@ -777,7 +754,6 @@ except (ImportError, ModuleNotFoundError):
     class InvalidVersion(Exception):
         pass
 
-
 # ===================== ENV SETUP =====================
 # Git Fehler unterdrücken
 if platform.system() == "Windows":
@@ -786,7 +762,6 @@ else:
     os.environ["GIT_REDIRECT_STDERR"] = "2>/dev/null"
 # ===================== SCRIPT DIR =====================
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
-
 
 def ensure_executable_self():
     """Setzt Ausführungsrechte für das eigene Skript (Linux/Unix)."""
@@ -797,15 +772,12 @@ def ensure_executable_self():
     except Exception as e:
         print(f"[WARN] Konnte Rechte nicht setzen: {e}")
 
-
 # ===================== ZEIT =====================
 now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "6.8.0"
-
-
+APP_VERSION = "7.0.0"
 # ===================== PATCH DIRS =====================
 def get_best_patch_dir():
     """Bestimmt den besten Patch-Ordner (S3, lokal, Home)."""
@@ -818,7 +790,6 @@ def get_best_patch_dir():
 
     os.makedirs(local_path, exist_ok=True)
     return local_path
-
 
 def get_initial_patch_dir():
     """Wählt den sichersten Backup-Ordner je nach OS."""
@@ -835,11 +806,9 @@ def get_initial_patch_dir():
     os.makedirs(path, exist_ok=True)
     return path
 
-
 # 1. Zuerst das Hauptverzeichnis definieren
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 WORK_DIR = PLUGIN_DIR
-
 # 2. Jetzt alle Pfade definieren, die auf PLUGIN_DIR basieren
 PYC_FILE = os.path.join(PLUGIN_DIR, "oscam_patch_manager.pyc")
 CACHE_DIR = os.path.join(PLUGIN_DIR, "__pycache__")
@@ -848,11 +817,9 @@ GITHUB_CONF_FILE = os.path.join(PLUGIN_DIR, "github_upload_config.json")
 PATCH_FILE = os.path.join(PLUGIN_DIR, "oscam-emu.patch")
 ZIP_FILE = os.path.join(PLUGIN_DIR, "oscam-emu.zip")
 ICON_DIR = os.path.join(PLUGIN_DIR, "icons")
-
 # 3. Verzeichnisse für Repos
 TEMP_REPO = os.path.join(PLUGIN_DIR, "temp_repo")
 PATCH_EMU_GIT_DIR = os.path.join(PLUGIN_DIR, "oscam-emu-git")
-
 # 4. Alte/Backup Pfade (Falls get_initial_patch_dir() existiert)
 OLD_PATCH_DIR = get_initial_patch_dir()
 OLD_PATCH_DIR_PLUGIN_DEFAULT = OLD_PATCH_DIR
@@ -867,6 +834,7 @@ PATCH_MODIFIER = "speedy005"
 EMUREPO = "https://github.com/oscam-mirror/oscam-emu.git"
 STREAMREPO = "https://git.streamboard.tv/common/oscam.git"
 # ===================== ORDNER-ERSTELLUNG =====================
+
 # Sicherstellen, dass alle 4 Basis-Ordner physisch existieren
 for d in [WORK_DIR, TEMP_REPO, PATCH_EMU_GIT_DIR, OLD_PATCH_DIR]:
     if d and not os.path.exists(d):
@@ -879,7 +847,6 @@ for d in [WORK_DIR, TEMP_REPO, PATCH_EMU_GIT_DIR, OLD_PATCH_DIR]:
 
 from PyQt6.QtWidgets import QLayout, QSizePolicy, QWidgetItem
 from PyQt6.QtCore import QRect, QSize, Qt, QPoint
-
 
 class FlowLayout(QLayout):
     def __init__(self, parent=None, margin=0, spacing=5):
@@ -974,7 +941,6 @@ class FlowLayout(QLayout):
 
         return y + line_height - rect.y()
 
-
 def ensure_dir(directory):
     """
     Erstellt das Verzeichnis, falls es noch nicht existiert.
@@ -995,9 +961,7 @@ def ensure_dir(directory):
         except Exception as e:
             print(f"[ERROR] Unbekannter Fehler beim Erstellen von {directory}: {e}")
 
-
 from PyQt6.QtCore import QObject, pyqtSignal
-
 
 class StreamToGui(QObject):
     """Sichere Weiterleitung von stdout an die GUI mittels Signalen."""
@@ -1013,7 +977,6 @@ class StreamToGui(QObject):
 
     def flush(self):
         pass
-
 
 # ===================== NEVER_DELETE =====================
 NEVER_DELETE = [
@@ -1492,7 +1455,6 @@ DIFF_COLORS = {
 current_diff_colors = DIFF_COLORS["Classics"]
 current_color_name = "Classics"
 
-
 def fill_missing_keys(texts):
     """
     Prüft, ob alle Keys aus 'en' auch in 'de' existieren.
@@ -1506,7 +1468,6 @@ def fill_missing_keys(texts):
             de_keys[key] = value  # Englische Version als Platzhalter
 
     texts["de"] = de_keys
-
 
 # ===================== LANGUAGE =====================
 LANG = "de"
@@ -2333,7 +2294,6 @@ for key, value in TEXTS["en"].items():
 # 4️⃣ **Unbedingt einmalig vor GUI-Start aufrufen**
 fill_missing_keys(TEXTS)
 
-
 def save_config(cfg_updates, gui_instance=None, silent=False):
     """
     Speichert Config-Updates und synchronisiert Timer, ProgressBar, Theme sowie S3, S4 & NCam Pfade.
@@ -2475,13 +2435,6 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
 
     except Exception as e:
         print(f"Fehler beim Speichern: {e}")
-
-
-
-
-
-
-
 
 # ===================== CONFIG =====================
 def load_config(gui_instance=None):
@@ -2784,12 +2737,10 @@ def github_upload_patch_file(
     # 7. Cleanup
     shutil.rmtree(temp_repo, ignore_errors=True)
 
-
 from datetime import datetime, timezone
 import subprocess
 import os
 import shutil  # wird unten benötigt
-
 
 def get_patch_header(repo_dir=None, lang="de", modifier=None):
     """
@@ -2855,7 +2806,6 @@ def get_patch_header(repo_dir=None, lang="de", modifier=None):
     )
 
     return header
-
 
 # ===================== PATCH FUNCTIONS =====================
 def create_patch(gui_instance=None, info_widget=None, progress_callback=None):
@@ -3263,11 +3213,6 @@ def create_patch(gui_instance=None, info_widget=None, progress_callback=None):
             else:
                 play_sound("dialog-error.oga")
 
-
-    
-
-
-
 # ===================== backup_old_patch=====================
 def backup_old_patch(self, make_backup=True, info_widget=None, progress_callback=None):
     # --- Final Label verstecken ---
@@ -3397,12 +3342,10 @@ def backup_old_patch(self, make_backup=True, info_widget=None, progress_callback
         log("patch_failed", "error", path=str(e))
         finalize_pbar("❌ Fehler!" if is_de else "❌ Error!")
 
-
 # ===================== CLEAN PATCH FOLDER =====================
 from PyQt6.QtWidgets import QTextEdit, QApplication
 from PyQt6.QtGui import QTextCursor
 import shutil, os
-
 
 def clean_patch_folder(gui_instance=None, info_widget=None, progress_callback=None):
     """Löscht temporäre Repos/Dateien mit Regenbogen-ProgressBar, schwarzer Schrift & zweisprachigem Abschluss."""
@@ -3624,7 +3567,6 @@ def clean_oscam_emu_git(gui_instance=None, progress_callback=None):
 
     return result
 
-
 # ===================== patch_oscam_emu_git=====================
 def patch_oscam_emu_git(gui_instance=None, info_widget=None, progress_callback=None):
     """
@@ -3786,7 +3728,6 @@ def patch_oscam_emu_git(gui_instance=None, info_widget=None, progress_callback=N
 
     if "safe_play" in globals(): globals()["safe_play"]("complete.oga")
 
-
 def load_github_config():
     if os.path.exists(GITHUB_CONF_FILE):
         try:
@@ -3810,7 +3751,6 @@ def save_github_config(cfg):
         json.dump(cfg, open(GITHUB_CONF_FILE, "w"))
     except:
         pass
-
 
 # ===================== GITHUB UPLOAD =====================
 def _github_upload(
@@ -3938,12 +3878,10 @@ def _github_upload(
         log(msg, "error")
         play_sound("error")
 
-
 # ===================== GITHUB UPLOAD PATCH FILE =====================
 from PyQt6.QtWidgets import QTextEdit, QApplication
 from PyQt6.QtGui import QTextCursor
 import shutil, os
-
 
 def run_bash(cmd, cwd=None, info_widget=None, lang="DE", logger=None):
     """
@@ -4035,7 +3973,6 @@ def run_bash(cmd, cwd=None, info_widget=None, lang="DE", logger=None):
     except Exception as e:
         log(f"run_bash error: {e}", "error")
         return -1
-
 
 # ===================== GITHUB UPLOAD OSCAM-EMU FOLDER =====================
 def github_upload_oscam_emu_folder(
@@ -4201,7 +4138,6 @@ def github_upload_oscam_emu_folder(
         log(f"Kritischer Fehler: {e}", "error")
         play_sound(False)
 
-
 # =====================
 # GITHUB CONFIG DIALOG
 # =====================
@@ -4295,9 +4231,7 @@ class GithubConfigDialog(QDialog):
             print(f"Fehler beim Speichern der GitHub-Config: {e}")
             self.reject()
 
-
 from PyQt6.QtCore import Qt, QTimer, QDateTime, QSize, QThread, pyqtSignal, QUrl
-
 
 class TaskWorker(QThread):
     progress = pyqtSignal(int)
@@ -4320,7 +4254,6 @@ class TaskWorker(QThread):
         except Exception as e:
             self.info.emit(f"Fehler: {str(e)}", "error")
             self.progress.emit(100)
-
 
 # =====================
 # PATCH MANAGER GUI
@@ -4349,7 +4282,6 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtWidgets import QWidget
 from PyQt6.QtCore import QTimer, QTime, Qt, QPoint
 from PyQt6.QtGui import QPainter, QPolygon, QColor
-
 
 class AnalogClock(QWidget):
     def __init__(self, parent=None):
@@ -4437,13 +4369,11 @@ class AnalogClock(QWidget):
         painter.setBrush(color_accent)
         painter.drawEllipse(-5, -5, 10, 10)
 
-
 # ---------------- MATRIX CINEMATIC SPLASH ----------------
 from PyQt6.QtWidgets import QWidget, QLabel, QProgressBar, QVBoxLayout
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont
 import os, random, platform, subprocess
-
 
 import os, sys, platform, subprocess, locale, importlib.util, threading, shutil, ctypes, random
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QProgressBar, QMessageBox
@@ -4457,8 +4387,6 @@ from PyQt6.QtGui import QFont, QPainter, QColor
 def is_admin():
     try: return ctypes.windll.shell32.IsUserAnAdmin()
     except: return False
-
-
 
 def verify_tools(tools):
     """Funktionstest der Tools mit Sound-Feedback bei Fehlern."""
@@ -4497,7 +4425,6 @@ from PyQt6.QtWidgets import (
 # Windows sound
 if platform.system() == "Windows":
     import winsound
-
 
 class CinematicMatrixSplash(QWidget):
     finished = pyqtSignal()
@@ -4544,10 +4471,10 @@ class CinematicMatrixSplash(QWidget):
             r" █               _______  _______  _______  _______  __   __              █ ",
             r" █             |       ||   _   ||       ||       ||  | |  |              █ ",
             r" █             |    ___||  |_|  ||_     _||       ||  |_|  |              █ ",
-           r" █             |   |___ |       |  |   |  |       ||       |              █ ",
+            r" █             |   |___ |       |  |   |  |       ||       |              █ ",
             r" █             |    ___||       |  |   |  |      _||       |              █ ",
             r" █             |   |    |   _   |  |   |  |     |_ | ||_|| |              █ ",
-           r" █             |___|    |__| |__|  |___|  |_______||_|   |_|              █ ",
+            r" █             |___|    |__| |__|  |___|  |_______||_|   |_|              █ ",
             r" █                                                                        █ ",
             r" █   __   __  _______  __    _  _______  _______  _______  ______         █ ",
             r" █  |  |_|  ||   _   ||  |  | ||   _   ||     __||    ___||    _ |        █ ",
@@ -4558,7 +4485,7 @@ class CinematicMatrixSplash(QWidget):
             r" █  |_|   |_||__| |__||_|  |__||__| |__||_______||_______||___|  |_|      █ ",
             r" █                                                                        █ ",
             r" █──────────────────[ SYSTEM: NEURAL_LINK OPERATIONAL ]───────────────────█ ",
-            r" █                   >> OSCAM EMU PATCH MANAGER v5.4.0   <<                 █ ",
+            r" █                   >> OSCAM EMU PATCH MANAGER v5.4.0   <<               █ ",
             r" █             >> CODENAME: Speedy_Oscam-_Patch_Manager 2026 <<           █ ",
             r" ◥◣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◢◤ "
         ]
@@ -4751,7 +4678,6 @@ class CinematicMatrixSplash(QWidget):
         self.is_closing = True
         self.play_sound("end")
         QTimer.singleShot(300, lambda: (self.finished.emit(), self.close()))
-
 
 class PatchManagerGUI(QWidget):
     def __init__(self):
@@ -5730,7 +5656,6 @@ class PatchManagerGUI(QWidget):
 
     # ========================== S3 ==========================
     
-
     def select_s3_path_manually(self):
         """Dialog zur manuellen Auswahl des S3 Pfads."""
         from PyQt6.QtWidgets import QFileDialog, QMessageBox
@@ -5804,7 +5729,6 @@ class PatchManagerGUI(QWidget):
             QMessageBox.information(self, "OK", f"{t['ok']}:\n{self.S3_PATH}")
         else:
             QMessageBox.warning(self, t["err_title"], t["err_msg"])
-
 
     def start_s3_install(self):
         """Startet die S3 Installation über Worker, Pfad wählbar und OS-optimiert."""
@@ -6246,15 +6170,6 @@ class PatchManagerGUI(QWidget):
                 self.info_text.append(f'<br><span style="color:red;"><b>{err_msg}</b></span>')
             self.open_terminal()
 
-
-
-
-
-
-
-
-
-
     def start_s4_menu(self):
         """Sucht SimpleBuild 4 (bevorzugt Config-Pfad) und startet das Terminal via Bash."""
 
@@ -6503,9 +6418,6 @@ class PatchManagerGUI(QWidget):
             err_msg = f"❌ NCam nicht gefunden in: {ncam_path}"
             if hasattr(self, "info_text") and self.info_text:
                 self.info_text.append(f'<br><span style="color:orange;"><b>{err_msg}</b></span>')
-
-
-
 
     def find_s3_executable(self):
         """Sucht automatisch nach der s3-Startdatei an bekannten Orten."""
@@ -9281,10 +9193,6 @@ class PatchManagerGUI(QWidget):
                     else lambda: pbar.setValue(0)
                 ),
             )
-
-
-
-
 
     def select_patch_path(self):
         """Öffnet Verzeichnis-Dialog mit Regenbogen-Progress, Sound und Auto-Reset zu Idle."""
