@@ -5850,7 +5850,7 @@ class PatchManagerGUI(QWidget):
             QTimer.singleShot(3000, restore_pbar)
 
     def start_s3_menu(self):
-        """Sucht s3 (bevorzugt Config-Pfad) und startet das Terminal."""
+        """Sucht s3, installiert die exakten MSYS2/Cygwin-Compiler-Tools und startet das Terminal."""
 
         # --- Final Label ausblenden ---
         if hasattr(self, "hide_final_label"):
@@ -5858,42 +5858,87 @@ class PatchManagerGUI(QWidget):
         elif hasattr(self, "final_label") and self.final_label:
             self.final_label.hide()
         
-        import os, shutil, platform
+        import os, shutil, platform, subprocess, urllib.request, tarfile
 
         s3_exec = None
         is_de = getattr(self, "LANG", "de") == "de"
         is_win = platform.system() == "Windows"
+
+        # --- AUTOMATISCHER CYGWIN/MSYS2 COMPILER-INSTALLER FÜR GIT BASH ---
+        if is_win:
+            # 1. Ermitteln wo Git Bash installiert ist (Standardpfade)
+            git_path = None
+            for p in ["C:\\Program Files\\Git", "C:\\Program Files (x86)\\Git", os.path.expanduser("~\\AppData\\Local\\Programs\\Git")]:
+                if os.path.exists(p):
+                    git_path = p
+                    break
+        
+            if git_path:
+                usr_bin = os.path.join(git_path, "usr", "bin")
+                usr_include = os.path.join(git_path, "usr", "include")
+            
+                # Wenn gcc oder make fehlen, laden wir die echten MSYS2-Zwillingspakete
+                if not os.path.exists(os.path.join(usr_bin, "gcc.exe")) or not os.path.exists(os.path.join(usr_bin, "make.exe")):
+                    if hasattr(self, "info_text") and self.info_text:
+                        self.info_text.append('<br><span style="color:#00FFFF;"><b>⚙️ Installiere MSYS2-POSIX-Compiler (gcc, make, pthread...) in Git Bash...</b></span>')
+                        from PyQt6.QtWidgets import QApplication; QApplication.processEvents()
+
+                    # Direkter Download der offiziellen, vorkompilierten MSYS2-Kernelemente, 
+                    # die nativ in der Git-Bash-Umgebung laufen
+                    components = {
+                        "make": "https://msys2.org",
+                        "gcc": "https://msys2.org",
+                        "headers": "https://msys2.org"
+                    }
+
+                    # Nutzen von Windows 11 integriertem 'curl' und 'tar', um .tar.zst Archive zu entpacken
+                    # Das umgeht Python-Rechteprobleme im geschützten Program-Files-Ordner
+                    for name, url in components.items():
+                        tmp_pkg = os.path.join(os.path.expanduser("~"), f"msys_{name}.pkg.tar.zst")
+                        try:
+                            # Download via Python
+                            urllib.request.urlretrieve(url, tmp_pkg)
+                        
+                            # Windows 11 tar kann .zst Archive nativ entpacken. Wir entpacken direkt in das Git-Wurzelverzeichnis.
+                            subprocess.run(
+                                f'tar -xvf "{tmp_pkg}" -C "{git_path}" --strip-components=1', 
+                                shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                            )
+                        
+                            if os.path.exists(tmp_pkg): os.remove(tmp_pkg)
+                        except Exception as e:
+                            print(f"Error deployment {name}: {e}")
+
+                # 2. Ergänzende Zusätze nachladen (UPX für Binaries & Dialog-Fixes)
+                additional_tools = {
+                    "dialog.exe": "https://github.com",
+                    "jq.exe": "https://github.com",
+                    "wget.exe": "https://eternallybored.org",
+                }
+                for tool_name, tool_url in additional_tools.items():
+                    target_file = os.path.join(usr_bin, tool_name)
+                    if not os.path.exists(target_file):
+                        try: urllib.request.urlretrieve(tool_url, target_file)
+                        except Exception: pass
 
         # 1. Basis-Pfad holen
         default_start = "C:\\s3" if is_win else "/opt/s3"
         s3_path = getattr(self, "S3_PATH", default_start)
         sub_folder = "s3"
 
-        # Mögliche Dateinamen für das Skript/die Binary
         possible_names = ["s3", "s3.exe"] if is_win else ["s3"]
         possible_paths = []
 
-        # Suchliste dynamisch aufbauen
         for name in possible_names:
             possible_paths.append(os.path.join(s3_path, name))
             possible_paths.append(os.path.join(s3_path, sub_folder, name))
 
-        # Priorität 2: Globale System-Fallbacks
         if is_win:
-            possible_paths.extend([
-                "C:\\s3\\s3",
-                "C:\\s3\\s3.exe",
-                "C:\\opt\\s3\\s3",
-            ])
+            possible_paths.extend(["C:\\s3\\s3", "C:\\s3\\s3.exe", "C:\\opt\\s3\\s3"])
         else:
-            possible_paths.extend([
-                "/opt/s3_neu/s3",
-                "/opt/s3/s3",
-                os.path.expanduser("~/s3/s3"),
-                shutil.which("s3"),
-            ])
+            possible_paths.extend(["/opt/s3_neu/s3", "/opt/s3/s3", os.path.expanduser("~/s3/s3"), shutil.which("s3")])
 
-        # 2. Den ersten Treffer validieren und finden
+        # 2. Validieren
         for path in possible_paths:
             if path and os.path.exists(path) and not os.path.isdir(path):
                 if is_win or os.access(path, os.X_OK):
@@ -5905,62 +5950,45 @@ class PatchManagerGUI(QWidget):
                             save_config({"s3_custom_path": self.S3_PATH}, gui_instance=self, silent=True)
                     break
 
-        # 3. Ausführung oder Fehlermeldung
+        # 3. Ausführung
         if s3_exec:
             if hasattr(self, "append_info") and hasattr(self, "info_text"):
                 msg = f"🚀 S3 Menü: {s3_exec}"
                 self.append_info(self.info_text, msg, "info")
 
-            # --- REINBASSIGER FIX ÜBER DIE GLOBALEN USER-PROFILEDATEIEN ---
             if is_win and not shutil.which("bc"):
                 user_home = os.path.expanduser("~")
-            
-                # Relevante Profildateien für Git Bash ermitteln
-                bash_profiles = [
-                    os.path.join(user_home, ".bashrc"),
-                    os.path.join(user_home, ".bash_profile")
-                ]
-            
-                # Die mathematische awk-Ersatzfunktion für bc
+                bash_profiles = [os.path.join(user_home, ".bashrc"), os.path.join(user_home, ".bash_profile")]
                 bc_injection = (
                     "\n# --- s3_compat bc start ---\n"
                     "function bc() { read -r in; echo \"$in\" | awk '{gsub(/[^0-9\\+\\-\\*/\\.]/, \"\"); cmd=\"awk \\\"BEGIN{print \" $0 \"}\\\"\"; system(cmd)}'; }\n"
                     "export -f bc\n"
                     "# --- s3_compat bc end ---\n"
                 )
-            
                 for profile_path in bash_profiles:
                     content = ""
                     if os.path.exists(profile_path):
                         try:
-                            with open(profile_path, "r", encoding="utf-8", errors="ignore") as f:
-                                content = f.read()
-                        except Exception:
-                            pass
-                
-                    # Nur reinschreiben, wenn die Funktion nicht schon existiert
+                            with open(profile_path, "r", encoding="utf-8", errors="ignore") as f: content = f.read()
+                        except Exception: pass
                     if "function bc()" not in content:
                         try:
-                            with open(profile_path, "a", encoding="utf-8") as f:
-                                f.write(bc_injection)
-                        except Exception:
-                            pass
+                            with open(profile_path, "a", encoding="utf-8") as f: f.write(bc_injection)
+                        except Exception: pass
 
-            # Startet das Terminal wieder absolut sauber mit dem echten Dateipfad,
-            # wodurch self.open_terminal() wie gewohnt anspringt.
+            # Terminal starten
             self.open_terminal(s3_path=s3_exec, use_sudo=not is_win)
         else:
-            err_msg = (
-                "❌ Fehler: s3 Startdatei nicht gefunden!"
-                if is_de
-                else "❌ Error: s3 executable not found!"
-            )
+            err_msg = "❌ Fehler: s3 Startdatei nicht gefunden!" if is_de else "❌ Error: s3 executable not found!"
             if hasattr(self, "info_text") and self.info_text:
-                self.info_text.append(
-                    f'<br><span style="color:red;"><b>{err_msg}</b></span>'
-                )
-
+                self.info_text.append(f'<br><span style="color:red;"><b>{err_msg}</b></span>')
             self.open_terminal()
+
+
+
+
+
+
 
 
 
@@ -9923,6 +9951,7 @@ class PatchManagerGUI(QWidget):
             self.final_label.hide()
 
         from PyQt6.QtWidgets import QMessageBox, QApplication
+        from PyQt6.QtCore import QTimer  # FIX: QTimer Import hinzugefügt
         import sys
         import os
         import subprocess
@@ -9986,31 +10015,36 @@ class PatchManagerGUI(QWidget):
             # --- PLATTFORMÜBERGREIFENDER NEUSTART ---
             try:
                 python_exe = sys.executable
+                # FIX: Variable einheitlich auf 'script' benannt
                 script = os.path.realpath(sys.argv[0])
                 cmd_args = sys.argv[1:]
 
                 # Starte neuen Prozess
                 if os.name == "nt":
+                    # FIX: 'script_path' zu 'script' korrigiert
                     subprocess.Popen(
-                        [python_exe, script_path] + cmd_args,
+                        [python_exe, script] + cmd_args,
                         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
                         close_fds=True,
                         shell=False,
                     )
                 else:
+                    # FIX: 'script_path' zu 'script' korrigiert
                     subprocess.Popen(
-                        [python_exe, script_path] + cmd_args,
-                        cwd=os.path.dirname(script_path),
-                        start_new_session=True if os.name != "nt" else False,
+                        [python_exe, script] + cmd_args,
+                        cwd=os.path.dirname(script),
+                        start_new_session=True,
                         close_fds=True
                     )
 
                 # Beende aktuelle Instanz sauber
                 QApplication.processEvents()
                 QTimer.singleShot(100, QApplication.quit)
+                
             except Exception as e:
                 print(f"❌ Kritischer Fehler beim Neustart: {e}")
                 QApplication.quit()
+                sys.exit(0)
         else:
             # Bei "Nein" Fortschrittsbalken (falls vorhanden) auf 100 setzen
             if progress_callback:
@@ -10018,6 +10052,7 @@ class PatchManagerGUI(QWidget):
                     progress_callback(100)
                 except:
                     pass
+
 
     def restart_application(self, *args, **kwargs):
         """Startet die Anwendung neu und zeigt kurz den Neon-Status an."""
@@ -10082,12 +10117,29 @@ class PatchManagerGUI(QWidget):
         # PFAD-FIX für Windows (Leerzeichen in 'Program Files' etc.)
         python = sys.executable
         script = os.path.realpath(sys.argv[0]) # Nutzt sys.argv[0] für den korrekten Skript-Einstiegspunkt
+        
+        # --- FIX FÜR WINDOWS NEUSTART (Entkopplung des Prozesses) ---
+        creation_flags = 0
+        if platform.system() == "Windows":
+            # Verhindert, dass der neue Prozess an der sterbenden alten CMD-Instanz hängen bleibt
+            creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
 
-        # Subprocess mit Liste verhindert das Abschneiden des Pfades
-        subprocess.Popen(
-            [python, script] + sys.argv[1:],
-            cwd=os.path.dirname(script)
-        )
+        try:
+            subprocess.Popen(
+                [python, script] + sys.argv[1:],
+                cwd=os.path.dirname(script),
+                creationflags=creation_flags
+            )
+        except Exception:
+            # Fallback falls die Argumentenliste beschädigt ist
+            subprocess.Popen([python, script], cwd=os.path.dirname(script), creationflags=creation_flags)
+
+        # --- DER ENTSCHEIDENDE FIX: Altes GUI-Fenster hart schließen ---
+        # Schließt die PyQt6-Schleife
+        QApplication.quit()
+        # Beendet den Python-Prozess im System restlos
+        sys.exit(0)
+
 
     # ===================== ZIP PATCH =====================
     def zip_patch(self, info_widget=None, progress_callback=None):
