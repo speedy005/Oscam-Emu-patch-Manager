@@ -1,17 +1,17 @@
 # Änderungen für oscam_patch_manager.py
-Letzte Aktualisierung: 26.06.2026 10:27
+Letzte Aktualisierung: 26.06.2026 10:51
 
 ---
 
 ## 🔧 Änderungen am Script
 
-
+* Update oscam_patch_manager.py (ae7dc5f)
 ---
 
 ## 📊 Aktueller Tool-Status
 
 ```text
-  File "/home/runner/work/Oscam-Emu-patch-Manager/Oscam-Emu-patch-Manager/oscam_patch_manager.py", line 8951
+  File "/home/runner/work/Oscam-Emu-patch-Manager/Oscam-Emu-patch-Manager/oscam_patch_manager.py", line 8965
     cmd_args = [git_bash, "--login", "-i", "-c", f"{exec_cmd_clean.replace('\\', '/')}; exec bash"]
                                                                                                   ^
 SyntaxError: f-string expression part cannot include a backslash
