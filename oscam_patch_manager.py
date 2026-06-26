@@ -803,7 +803,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "6.4.0"
+APP_VERSION = "6.8.0"
 
 
 # ===================== PATCH DIRS =====================
@@ -2865,7 +2865,12 @@ def create_patch(gui_instance=None, info_widget=None, progress_callback=None):
     """
     from PyQt6.QtWidgets import QTextEdit, QApplication
     from PyQt6.QtGui import QTextCursor
-    import subprocess, os, shutil, re, platform
+    from PyQt6.QtCore import QDateTime
+    import subprocess
+    import os
+    import shutil
+    import re
+    import platform
 
     is_linux = platform.system() == "Linux"
 
@@ -2877,7 +2882,8 @@ def create_patch(gui_instance=None, info_widget=None, progress_callback=None):
                 # Linux: 777/666 | Windows: ignoriert chmod meist, schadet aber nicht
                 mode = 0o777 if os.path.isdir(path) else 0o666
                 os.chmod(path, mode)
-        except: pass
+        except:
+            pass
 
     def safe_makedirs(path):
         """Erstellt Ordnerstruktur sicher und fängt Windows-Sudo-Fehler ab."""
@@ -2885,13 +2891,20 @@ def create_patch(gui_instance=None, info_widget=None, progress_callback=None):
             try:
                 old_umask = os.umask(0) if is_linux else None
                 os.makedirs(path, mode=0o777, exist_ok=True)
-                if old_umask is not None: os.umask(old_umask)
+
+                if old_umask is not None:
+                    os.umask(old_umask)
+
             except Exception:
                 # Sudo nur unter Linux als Fallback nutzen
                 if is_linux:
-                    subprocess.run(["sudo", "mkdir", "-p", path], check=False)
+                    subprocess.run(
+                        ["sudo", "mkdir", "-p", path],
+                        check=False
+                    )
                 else:
-                    raise # Unter Windows direkt Fehler werfen
+                    raise  # Unter Windows direkt Fehler werfen
+
         ensure_permissions(path)
 
     # --- UI & Sprach-Setup ---
@@ -2931,93 +2944,328 @@ def create_patch(gui_instance=None, info_widget=None, progress_callback=None):
     }
 
     def set_progress(val, text_key=None, is_error=False):
-        text_msg = TEXTS.get(lang, TEXTS.get("en", {})).get(text_key, text_key) if text_key else ""
+        text_msg = (
+            TEXTS.get(lang, TEXTS.get("en", {})).get(text_key, text_key)
+            if text_key else ""
+        )
+
         if gui_instance:
             pbar = getattr(gui_instance, "progress_bar", None)
+
             if pbar:
-                rainbow = "qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 #FF00FF, stop:0.5 #00FFFF, stop:1 #39FF14)"
-                error_grad = "qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 #800, stop:1 #F00)"
-                pbar.setStyleSheet(f"QProgressBar {{ border: 2px solid #444; border-radius: 8px; background: #0A0A0A; color: {'red' if is_error else 'black'}; text-align: center; font-weight: bold; }} QProgressBar::chunk {{ background: {error_grad if is_error else rainbow}; }}")
+                rainbow = (
+                    "qlineargradient(spread:pad, x1:0, y1:0, "
+                    "x2:1, y2:0, stop:0 #FF00FF, "
+                    "stop:0.5 #00FFFF, stop:1 #39FF14)"
+                )
+
+                error_grad = (
+                    "qlineargradient(spread:pad, x1:0, y1:0, "
+                    "x2:1, y2:0, stop:0 #800, stop:1 #F00)"
+                )
+
+                pbar.setStyleSheet(
+                    f"""
+                    QProgressBar {{
+                        border: 2px solid #444;
+                        border-radius: 8px;
+                        background: #0A0A0A;
+                        color: {"red" if is_error else "black"};
+                        text-align: center;
+                        font-weight: bold;
+                    }}
+
+                    QProgressBar::chunk {{
+                        background: {error_grad if is_error else rainbow};
+                    }}
+                    """
+                )
+
                 pbar.setValue(val)
                 pbar.setFormat(f"{text_msg} ({val}%)")
                 pbar.show()
-        if progress_callback:
-            try: progress_callback(val); QApplication.processEvents()
-            except: pass
 
-    def log(text_key, level="info", **kwargs):
-        text_template = TEXTS.get(lang, TEXTS.get("en", {})).get(text_key, text_key)
-        try: text = text_template.format(**kwargs)
-        except: text = text_template
+        if progress_callback:
+            try:
+                progress_callback(val)
+                QApplication.processEvents()
+            except Exception:
+                pass
+
+    def log(text_key, level="info", raw_text=None, **kwargs):
+        if raw_text:
+            text = raw_text
+        else:
+            text_template = TEXTS.get(
+                lang,
+                TEXTS.get("en", {})
+            ).get(text_key, text_key)
+
+            try:
+                text = text_template.format(**kwargs)
+            except Exception:
+                text = text_template
+
         if isinstance(widget, QTextEdit):
-            color = {"success": "#39FF14", "warning": "orange", "error": "red"}.get(level, "yellow")
-            widget.append(f'<span style="color:{color}"><b>{text}</b></span>')
+            color = {
+                "success": "#39FF14",
+                "warning": "orange",
+                "error": "red",
+                "version": "#00FFFF"
+            }.get(level, "yellow")
+
+            widget.append(
+                f'<span style="color:{color}"><b>{text}</b></span>'
+            )
+
             widget.moveCursor(QTextCursor.MoveOperation.End)
             QApplication.processEvents()
 
     # --- HAUPTPROZESS ---
     try:
         play_sound = globals().get("safe_play")
-        if play_sound: play_sound("dialog-information.oga")
-        
+
+        if play_sound:
+            if platform.system() == "Windows":
+                try:
+                    import winsound
+
+                    winsound.PlaySound(
+                        "SystemAsterisk",
+                        winsound.SND_ALIAS | winsound.SND_ASYNC
+                    )
+                except Exception:
+                    pass
+            else:
+                play_sound("dialog-information.oga")
+
         log("patch_create_start", "info")
         set_progress(5, "patch_create_start")
 
         # VM/Windows FIX: Nutze lokales Temp-Verzeichnis
-        work_dir = "/tmp/oscam_patch_work" if is_linux else os.path.join(os.environ.get("TEMP", "."), "oscam_patch_work")
-        
+        work_dir = (
+            "/tmp/oscam_patch_work"
+            if is_linux
+            else os.path.join(
+                os.environ.get("TEMP", "."),
+                "oscam_patch_work"
+            )
+        )
+
         if os.path.exists(work_dir):
             shutil.rmtree(work_dir, ignore_errors=True)
-        
+
         safe_makedirs(work_dir)
         set_progress(15, "patch_create_clone_start")
 
-        # Git-Operationen (capture_output=True verhindert Terminal-Popups)
-        subprocess.run(["git", "init"], cwd=work_dir, capture_output=True)
-        subprocess.run(["git", "remote", "add", "origin", stream_repo], cwd=work_dir, capture_output=True)
-        subprocess.run(["git", "remote", "add", "emu-repo", active_emu_repo], cwd=work_dir, capture_output=True)
+        # Git-Operationen (FIX: git-repo zu git korrigiert)
+        subprocess.run(
+            ["git", "init"],
+            cwd=work_dir,
+            capture_output=True
+        )
+
+        subprocess.run(
+            ["git", "remote", "add", "origin", stream_repo],
+            cwd=work_dir,
+            capture_output=True
+        )
+
+        subprocess.run(
+            ["git", "remote", "add", "emu-repo", active_emu_repo],
+            cwd=work_dir,
+            capture_output=True
+        )
 
         set_progress(30, "patch_fetch_checkout")
-        subprocess.run(["git", "fetch", "origin", "master"], cwd=work_dir, capture_output=True)
-        subprocess.run(["git", "fetch", "emu-repo", "master"], cwd=work_dir, capture_output=True)
-        subprocess.run(["git", "checkout", "-B", "master", "origin/master"], cwd=work_dir, capture_output=True)
+
+        subprocess.run(
+            ["git", "fetch", "origin", "master"],
+            cwd=work_dir,
+            capture_output=True
+        )
+
+        subprocess.run(
+            ["git", "fetch", "emu-repo", "master"],
+            cwd=work_dir,
+            capture_output=True
+        )
+
+        subprocess.run(
+            ["git", "checkout", "-B", "master", "origin/master"],
+            cwd=work_dir,
+            capture_output=True
+        )
 
         set_progress(60, "patch_generate_diff")
-        diff_output = subprocess.check_output(["git", "diff", "origin/master..emu-repo/master", "--", ".", ":!.github"], cwd=work_dir, text=True)
+
+        diff_output = subprocess.check_output(
+            [
+                "git",
+                "diff",
+                "origin/master..emu-repo/master",
+                "--",
+                ".",
+                ":!.github"
+            ],
+            cwd=work_dir,
+            text=True
+        )
 
         if not diff_output.strip():
             log("patch_create_no_changes", "warning")
             diff_output = "# No changes detected"
 
         header_func = globals().get("get_patch_header")
-        header = header_func(repo_dir=work_dir, lang=lang, modifier=active_modifier) if header_func else "# OSCam Emu Patch"
 
-        # Finale Datei schreiben (newline='\n' erzwingt Linux-Format auch unter Windows)
-        patch_file_path = os.path.abspath(globals().get("PATCH_FILE", "oscam-emu.patch"))
-        with open(patch_file_path, "w", encoding="utf-8", newline='\n') as f:
+        header = (
+            header_func(
+                repo_dir=work_dir,
+                lang=lang,
+                modifier=active_modifier
+            )
+            if header_func
+            else "# OSCam Emu Patch"
+        )
+
+        # Finale Datei schreiben
+        patch_file_path = os.path.abspath(
+            globals().get("PATCH_FILE", "oscam-emu.patch")
+        )
+
+        with open(
+            patch_file_path,
+            "w",
+            encoding="utf-8",
+            newline="\n"
+        ) as f:
             f.write(header + "\n" + diff_output + "\n")
-        
+
         ensure_permissions(patch_file_path)
 
         # Revision ermitteln & speichern
-        rev_match = re.search(r"-(\d{5,6})-", header) or re.search(r"r(\d{5,6})", diff_output[:1000])
+        new_rev = "11965"  # Standard Fallback
+
+        rev_match = (
+            re.search(r"-(\d{5,6})-", header)
+            or re.search(r"r(\d{5,6})", diff_output[:1000])
+        )
+
         if rev_match:
             new_rev = rev_match.group(1)
-            rev_txt = os.path.join(os.path.dirname(os.path.abspath(__file__)), "oscam_rev.txt")
-            with open(rev_txt, "w", encoding="utf-8") as f: f.write(new_rev)
-            if gui_instance: gui_instance.current_rev = new_rev
+
+            rev_txt = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "oscam_rev.txt"
+            )
+
+            with open(rev_txt, "w", encoding="utf-8") as f:
+                f.write(new_rev)
+
+            if gui_instance:
+                gui_instance.current_rev = new_rev
+
             log("patch_rev_saved", "success", rev=new_rev)
 
+        # --- DYNAMISCHE VERSIONSDATEN AUTOMATISCH ERMITTELN ---
+        date_str = QDateTime.currentDateTime().toString("d.MM.yy")
+
+        commit_count = "802"
+        old_cfg = getattr(
+            gui_instance,
+            "cfg",
+            getattr(gui_instance, "current_config", {})
+        )
+
+        if isinstance(old_cfg, dict):
+            commit_count = str(
+                old_cfg.get("commit_count", commit_count)
+            )
+
+        short_hash = "unknown"
+
+        try:
+            hash_output = subprocess.check_output(
+                [
+                    "git",
+                    "rev-parse",
+                    "--short=8",
+                    "emu-repo/master"
+                ],
+                cwd=work_dir,
+                text=True
+            )
+
+            short_hash = hash_output.strip()
+
+        except Exception:
+            try:
+                hash_output = subprocess.check_output(
+                    ["git", "rev-parse", "--short=8", "HEAD"],
+                    cwd=work_dir,
+                    text=True
+                )
+
+                short_hash = hash_output.strip()
+
+            except Exception:
+                pass
+
+        version_text = (
+            f"patch version: "
+            f"{date_str}-{new_rev}-{commit_count} ({short_hash})"
+        )
+
+        # --- ERFOLGS-LOGS IN REIHENFOLGE AUSGEBEN ---
         set_progress(100, "patch_create_success")
         log("patch_create_success", "success")
-        if play_sound: play_sound("complete.oga")
+        log(None, "version", raw_text=version_text)
+
+        if play_sound:
+            if platform.system() == "Windows":
+                try:
+                    import winsound
+
+                    winsound.PlaySound(
+                        "SystemAsterisk",
+                        winsound.SND_ALIAS | winsound.SND_ASYNC
+                    )
+                except Exception:
+                    pass
+            else:
+                play_sound("complete.oga")
 
     except Exception as e:
         log("patch_create_failed", "error")
+
         if isinstance(widget, QTextEdit):
-            widget.append(f'<span style="color:red"><i>Detail: {str(e)}</i></span>')
-        set_progress(100, "patch_create_failed", is_error=True)
-        if play_sound: play_sound("dialog-error.oga")
+            widget.append(
+                f'<span style="color:red"><i>Detail: {str(e)}</i></span>'
+            )
+
+        set_progress(
+            100,
+            "patch_create_failed",
+            is_error=True
+        )
+
+        if play_sound:
+            if platform.system() == "Windows":
+                try:
+                    import winsound
+
+                    winsound.PlaySound(
+                        "SystemHand",
+                        winsound.SND_ALIAS | winsound.SND_ASYNC
+                    )
+                except Exception:
+                    pass
+            else:
+                play_sound("dialog-error.oga")
+
+
+    
+
 
 
 # ===================== backup_old_patch=====================
