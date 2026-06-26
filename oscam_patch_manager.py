@@ -458,16 +458,21 @@ def check_and_install_dependencies(required_packages):
 # ===================== GLOBALE SOUND-SICHERHEIT=====================
 import glob
 import os
-#import pwd
+import platform
 import shutil
 import subprocess
-import platform
+
+# 'pwd' nur unter Linux importieren, um den Windows-Fehler zu verhindern
+if platform.system() == "Linux":
+    import pwd
+else:
+    pwd = None
 
 HAS_PAPLAY = shutil.which("paplay") is not None
 
 
 def safe_play(sound_name):
-    if platform.system() != "Linux":
+    if platform.system() != "Linux" or pwd is None:
         return
 
     s_path = f"/usr/share/sounds/freedesktop/stereo/{sound_name}"
@@ -483,13 +488,21 @@ def safe_play(sound_name):
 
         # Als Root -> aktiven Desktop-Benutzer suchen
         for runtime in glob.glob("/run/user/*"):
-            uid = int(os.path.basename(runtime))
+            uid_str = os.path.basename(runtime)
+            if not uid_str.isdigit():
+                continue
+
+            uid = int(uid_str)
 
             # Systembenutzer überspringen
             if uid < 1000:
                 continue
 
-            user = pwd.getpwuid(uid).pw_name
+            try:
+                # Holt den Benutzernamen (fängt KeyError ab, falls UID ungültig ist)
+                user = pwd.getpwuid(uid).pw_name
+            except KeyError:
+                continue  # Überspringen, falls der Benutzer nicht (mehr) existiert
 
             env = os.environ.copy()
             env["XDG_RUNTIME_DIR"] = runtime
@@ -504,6 +517,7 @@ def safe_play(sound_name):
 
     except Exception as e:
         print("safe_play:", e)
+
 
 
 import os
@@ -789,7 +803,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "6.2.0"
+APP_VERSION = "6.3.0"
 
 
 # ===================== PATCH DIRS =====================
@@ -12205,9 +12219,9 @@ class PatchManagerGUI(QWidget):
         main_h_layout.setContentsMargins(5, 0, 0, 0)
         main_h_layout.setSpacing(15)
 
-        self.analog_clock = AnalogClock()
-        self.analog_clock.setFixedSize(80, 80)
-        main_h_layout.addWidget(self.analog_clock)
+        #self.analog_clock = AnalogClock()
+        #self.analog_clock.setFixedSize(80, 80)
+        #main_h_layout.addWidget(self.analog_clock)
 
         labels_v_container = QWidget()
         labels_v_layout = QVBoxLayout(labels_v_container)
@@ -12217,10 +12231,10 @@ class PatchManagerGUI(QWidget):
         bold_font_time = QFont("Segoe UI", 22, QFont.Weight.Bold)
         bold_font_date = QFont("Segoe UI", 24, QFont.Weight.Bold)
 
-        # self.digital_clock = QLabel("--:--:--")
-        # self.digital_clock.setFont(bold_font_time)
-        # self.digital_clock.setStyleSheet("color: red;")
-        # labels_v_layout.addWidget(self.digital_clock)
+        self.digital_clock = QLabel("--:--:--")
+        self.digital_clock.setFont(bold_font_time)
+        self.digital_clock.setStyleSheet("color: red;")
+        labels_v_layout.addWidget(self.digital_clock)
 
         # 1. Horizontaler Haupt-Container (Datum links, Buttons rechts davon)
         from PyQt6.QtWidgets import QSpacerItem, QSizePolicy
@@ -12456,7 +12470,7 @@ class PatchManagerGUI(QWidget):
 
         # Autor Label (Blau im Screenshot)
         self.by_label = QLabel("by speedy005")
-        self.by_label.setFont(QFont("Segoe UI", 22, QFont.Weight.Bold))
+        self.by_label.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
         self.by_label.setStyleSheet("color: #0055ff; background: transparent;")
 
         # In den kleinen Container packen
@@ -13268,13 +13282,16 @@ class PatchManagerGUI(QWidget):
         # ---------------------------------------------------------
         def update_digital_clock():
             now = QDateTime.currentDateTime()
-            # self.digital_clock.setText(now.toString("HH:mm:ss"))
+            # Aktiviert die digitale Uhrzeit-Aktualisierung:
+            self.digital_clock.setText(now.toString("HH:mm:ss"))
+            # Aktualisiert das Datum:
             self.date_label.setText(now.toString("dd.MM.yyyy"))
 
         self.clock_timer = QTimer(self)
         self.clock_timer.timeout.connect(update_digital_clock)
         self.clock_timer.start(1000)
         update_digital_clock()
+
 
         # ---------------------------------------------------------
         # FINAL SETTINGS
@@ -15623,7 +15640,15 @@ class PatchManagerGUI(QWidget):
             except Exception as e:
                 print(f"[WARN] Config save failed: {e}")
 
+            # ================= SOUND BEIM BEENDEN ABSPIELEN =================
+            try:
+                safe_play("service-logout.oga")
+            except Exception as e:
+                print(f"[WARN] Sound play failed: {e}")
+            # ================================================================
+
             QApplication.quit()
+
 
     def closeEvent(self, event):
         """
