@@ -777,7 +777,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "7.0.0"
+APP_VERSION = "7.1.0"
 # ===================== PATCH DIRS =====================
 def get_best_patch_dir():
     """Bestimmt den besten Patch-Ordner (S3, lokal, Home)."""
@@ -4996,6 +4996,11 @@ class PatchManagerGUI(QWidget):
         self._idle_anim.valueChanged.connect(update_style)
         self._idle_anim.start()
 
+    def create_buttons(self):
+        self.btn_s3 = QPushButton("🚀 Install S3")
+        self.btn_s4 = QPushButton("🚀 Install S4")
+        self.btn_ncam = QPushButton("🚀 Install NCam-speedy")
+    
     def fix_all_tool_permissions(self, **kwargs):
         """Setzt rekursiv Schreibrechte mit ProgressBar, Sound und Sprachprüfung."""
         import os
@@ -9122,7 +9127,9 @@ class PatchManagerGUI(QWidget):
                         # S3 & NCam laufen stabil in der echten Git-Bash (Verarbeitet Vorwärts-Slashes)
                         if os.path.exists(git_bash) and exec_cmd:
                             exec_cmd_clean = exec_cmd.replace('"', '')
-                            cmd_args = [git_bash, "--login", "-i", "-c", f"{exec_cmd_clean.replace('\\', '/')}; exec bash"]
+                            # Backslash-Ersetzung vorab außerhalb des f-Strings durchführen:
+                            git_bash_cmd = exec_cmd_clean.replace('\\', '/')
+                            cmd_args = [git_bash, "--login", "-i", "-c", f"{git_bash_cmd}; exec bash"]
                             subprocess.Popen(cmd_args, creationflags=subprocess.CREATE_NEW_CONSOLE)
                             terminal_opened = True
                         elif exec_cmd:
@@ -9130,6 +9137,7 @@ class PatchManagerGUI(QWidget):
                             cmd_args = ["cmd", "/K", win_cmd]
                             subprocess.Popen(cmd_args, creationflags=subprocess.CREATE_NEW_CONSOLE)
                             terminal_opened = True
+
                 else:
                     # Fallback: Einfach nur leeres Terminal öffnen, falls kein Pfad da ist
                     subprocess.Popen(["cmd"], creationflags=subprocess.CREATE_NEW_CONSOLE)
@@ -9967,10 +9975,10 @@ class PatchManagerGUI(QWidget):
 
             btn.setSizePolicy(
                 QSizePolicy.Policy.Expanding,
-                QSizePolicy.Policy.MinimumExpanding,
+                QSizePolicy.Policy.Fixed
             )
-            btn.setMinimumHeight(FLACH_HEIGHT)
-            btn.setMaximumHeight(FLACH_HEIGHT)
+            btn.setMinimumHeight(42)
+            btn.setMaximumHeight(60)
             btn.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
 
             row, col = divmod(idx, cols_per_row)
@@ -12328,16 +12336,26 @@ class PatchManagerGUI(QWidget):
         main_layout.setSpacing(12)
         main_layout.setContentsMargins(5, 0, 20, 10)
         self.setStyleSheet("background-color: #2F2F2F;")
+        self.create_buttons()
+        
+        # =========================================================
+        # HEADER-BEREICH (STEAM / DISCORD CLEAN)
+        # =========================================================
 
-        # ---------------------------------------------------------
-        # Header-Bereich
-        # ---------------------------------------------------------
         header_widget = QFrame()
         header_widget.setMinimumHeight(110)
         header_widget.setStyleSheet(
             """
-            QFrame { background-color: #2F2F2F; border: 1px solid #444; border-radius: 10px; }
-            QLabel { background-color: transparent; border: none; font-weight: bold; }
+            QFrame {
+                background-color: #2F2F2F;
+                border: 1px solid #444;
+                border-radius: 10px;
+            }
+            QLabel {
+                background-color: transparent;
+                border: none;
+                font-weight: bold;
+            }
             QPushButton {
                 color: #EAFF00 !important;
                 background-color: #3d3d3d;
@@ -12346,20 +12364,32 @@ class PatchManagerGUI(QWidget):
                 padding: 5px;
                 font-weight: bold;
             }
-            QPushButton:hover { background-color: #4d4d4d; border: 1px solid #EAFF00; color: white !important; }
+            QPushButton:hover {
+                background-color: #4d4d4d;
+                border: 1px solid #EAFF00;
+                color: white !important;
+            }
         """
         )
 
         header_layout = QHBoxLayout(header_widget)
         header_layout.setContentsMargins(15, 5, 15, 5)
-        header_layout.setSpacing(10)
+        header_layout.setSpacing(12)
+        header_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        # --- LEFT: Info + Uhr/Daten ---
+
+        # =========================================================
+        # LEFT SECTION
+        # =========================================================
+
         left_header_container = QWidget()
         left_header_layout = QHBoxLayout(left_header_container)
         left_header_layout.setContentsMargins(0, 0, 0, 0)
-        left_header_layout.setSpacing(10)
+        left_header_layout.setSpacing(12)
+        left_header_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
+
+        # --- INFO BUTTON ---
         self.info_button = QPushButton()
         self.info_button.setFixedSize(45, 45)
         icon_info = self.style().standardIcon(
@@ -12370,134 +12400,98 @@ class PatchManagerGUI(QWidget):
         self.info_button.clicked.connect(self.show_info)
         left_header_layout.addWidget(self.info_button)
 
+
+        # =========================================================
+        # CLOCK + DATE (WICHTIG: VBOX = UNTEREINANDER)
+        # =========================================================
+
         time_date_container = QWidget()
-        main_h_layout = QHBoxLayout(time_date_container)
-        main_h_layout.setContentsMargins(5, 0, 0, 0)
-        main_h_layout.setSpacing(15)
-
-        #self.analog_clock = AnalogClock()
-        #self.analog_clock.setFixedSize(80, 80)
-        #main_h_layout.addWidget(self.analog_clock)
-
-        labels_v_container = QWidget()
-        labels_v_layout = QVBoxLayout(labels_v_container)
-        labels_v_layout.setContentsMargins(0, 0, 0, 0)
-        labels_v_layout.setSpacing(0)
+        time_date_layout = QVBoxLayout(time_date_container)
+        time_date_layout.setContentsMargins(0, 0, 0, 0)
+        time_date_layout.setSpacing(2)
+        time_date_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         bold_font_time = QFont("Segoe UI", 22, QFont.Weight.Bold)
         bold_font_date = QFont("Segoe UI", 24, QFont.Weight.Bold)
 
+        # --- CLOCK ---
         self.digital_clock = QLabel("--:--:--")
         self.digital_clock.setFont(bold_font_time)
         self.digital_clock.setStyleSheet("color: red;")
-        labels_v_layout.addWidget(self.digital_clock)
+        time_date_layout.addWidget(self.digital_clock, alignment=Qt.AlignmentFlag.AlignLeft)
 
-        # 1. Horizontaler Haupt-Container (Datum links, Buttons rechts davon)
-        from PyQt6.QtWidgets import QSpacerItem, QSizePolicy
-
-        date_s3_h_layout = QHBoxLayout()
-        date_s3_h_layout.setContentsMargins(0, 0, 0, 0)
-        date_s3_h_layout.setSpacing(
-            0
-        )  # Spacing auf 0, da wir den Spacer für den Abstand nutzen
-
-        # --- DAS DATUM (Bleibt links) ---
+        # --- DATE ---
         self.date_label = QLabel("--.--.----")
         self.date_label.setFont(bold_font_date)
         self.date_label.setStyleSheet("color: orange; background: transparent;")
-        date_s3_h_layout.addWidget(self.date_label)
+        time_date_layout.addWidget(self.date_label, alignment=Qt.AlignmentFlag.AlignLeft)
 
-        # --- DER ABSTANDHALTER (Spacer) ---
-        # Schiebt alles, was danach kommt (die Buttons), nach rechts.
-        # Die '60' ist die Pixel-Breite des Abstands.
-        date_s3_h_layout.addSpacerItem(
-            QSpacerItem(60, 10, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Minimum)
-        )
 
-        # --- Vertikaler Container für die Buttons (Untereinander) ---
-        btn_v_sub_layout = QVBoxLayout()
-        btn_v_sub_layout.setSpacing(5)  # Abstand zwischen S3 und NCam Button
-        btn_v_sub_layout.setContentsMargins(0, 0, 0, 0)
+        # =========================================================
+        # BUTTON CARD (STEAM STYLE)
+        # =========================================================
 
-        # --- Der S3 Button ---
-        self.btn_s3 = QPushButton("🚀 Install S3")
-        self.btn_s3.setFixedSize(180, self.UI_BUTTON_H)
-        self.btn_s3.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_s3.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-        self.btn_s3.setStyleSheet(
-            """
-            QPushButton { 
-                color: orange; background-color: #3d3d3d; 
-                border: 1px solid #555; border-radius: 8px; 
-            }
-            QPushButton:hover { background-color: orange; color: black; }
-            """
-        )
+        btn_card = QWidget()
+        btn_card_layout = QVBoxLayout(btn_card)
+        btn_card_layout.setContentsMargins(0, 0, 0, 0)
+        btn_card_layout.setSpacing(6)
+        btn_card_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # --- Der neue SimpleBuild 4 (S4) Button ---
-        self.btn_s4 = QPushButton("🚀 Install S4")
-        self.btn_s4.setFixedSize(180, self.UI_BUTTON_H)
-        self.btn_s4.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_s4.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-        self.btn_s4.setStyleSheet(
-            """
-            QPushButton { 
-                color: orange; background-color: #3d3d3d; 
-                border: 1px solid #555; border-radius: 8px; 
-            }
-            QPushButton:hover { background-color: orange; color: black; }
-            """
-        )
-
-        # --- Der NCam-Button ---
-        self.btn_ncam = QPushButton("🚀 Install NCam-speedy")
-        self.btn_ncam.setFixedSize(190, self.UI_BUTTON_H)
-        self.btn_ncam.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_ncam.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-        self.btn_ncam.setStyleSheet(
-            """
-            QPushButton { 
-                color: orange; background-color: #3d3d3d; 
-                border: 1px solid #555; border-radius: 8px; 
-            }
-            QPushButton:hover { background-color: orange; color: black; }
-            """
-        )
-
-        # Horizontales Layout: S3 und S4 nebeneinander setzen
         s3_s4_h_layout = QHBoxLayout()
+        s3_s4_h_layout.setSpacing(8)
+        s3_s4_h_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.btn_s3.setFixedSize(180, self.UI_BUTTON_H)
+        self.btn_s4.setFixedSize(180, self.UI_BUTTON_H)
+        self.btn_ncam.setFixedSize(190, self.UI_BUTTON_H)
+
         s3_s4_h_layout.addWidget(self.btn_s3)
         s3_s4_h_layout.addWidget(self.btn_s4)
 
-        # Zum vertikalen Layout hinzufügen: Erst die S3/S4-Reihe, dann NCam darunter
-        btn_v_sub_layout.addLayout(s3_s4_h_layout)
-        btn_v_sub_layout.addWidget(self.btn_ncam)
+        btn_card_layout.addLayout(s3_s4_h_layout)
 
-        # Das vertikale Button-Paket in das horizontale Hauptlayout einfügen
-        date_s3_h_layout.addLayout(btn_v_sub_layout)
+        btn_card_layout.addWidget(
+            self.btn_ncam,
+            alignment=Qt.AlignmentFlag.AlignCenter
+        )
 
-        # --- Signale & Kontextmenüs für S3 ---
+
+        # =========================================================
+        # LEFT BUILD (ORDER WICHTIG!)
+        # =========================================================
+
+        left_header_layout.addWidget(time_date_container)
+        left_header_layout.addWidget(btn_card)
+
+
+        # =========================================================
+        #         FINAL HEADER ASSEMBLY
+        # =========================================================
+
+        header_layout.addWidget(left_header_container, 1)
+
+
+        # =========================================================
+        # SIGNALS (UNCHANGED)
+        # =========================================================
+
         self.btn_s3.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.btn_s3.customContextMenuRequested.connect(self.select_s3_path_manually)
         self.btn_s3.clicked.connect(self.start_s3_install)
 
-        # --- Signale & Kontextmenüs für S4 ---
         self.btn_s4.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.btn_s4.customContextMenuRequested.connect(self.select_s4_path_manually)
         self.btn_s4.clicked.connect(self.start_s4_install)
 
-        # --- Signale & Kontextmenüs für NCam ---
         self.btn_ncam.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.btn_ncam.customContextMenuRequested.connect(self.select_ncam_path_manually)
         self.btn_ncam.clicked.connect(self.start_ncam_install)
 
-        # 2. Integration in das übergeordnete Layout
-        labels_v_layout.addLayout(date_s3_h_layout)
-        labels_v_layout.setAlignment(date_s3_h_layout, Qt.AlignmentFlag.AlignLeft)
 
-        # --- REST DEINER STRUKTUR ---
-        main_h_layout.addWidget(labels_v_container)
-        left_header_layout.addWidget(time_date_container)
+        # =========================================================
+        # FINAL HEADER ATTACH
+        # =========================================================
+
         header_layout.addWidget(left_header_container, 1)
 
         # --- MIDDLE: Logo ---
