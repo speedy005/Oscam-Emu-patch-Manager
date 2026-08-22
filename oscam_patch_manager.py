@@ -1,7 +1,7 @@
 import os
 import sys
 import platform
-
+import importlib.util
 if platform.system() == "Windows":
     os.environ["QT_QUICK_BACKEND"] = "software"
     os.environ["QT_OPENGL"] = "software"
@@ -84,7 +84,17 @@ REQUIRED_TOOLS = [
 
 def check_python():
     if sys.version_info < (3, 9):
-        print("Python 3.9+ required")
+        # Falls Windows, geben wir dem User den passenden winget-Befehl zur Selbsthilfe aus
+        if platform.system() == "Windows":
+            print("\n" + "="*60)
+            print("⚠️ [FEHLER] Python 3.9 oder höher wird zwingend benötigt!")
+            print(f"Aktuelle Version: {sys.version_info.major}.{sys.version_info.minor}")
+            print("\nTipp für Windows 11: Öffne die Eingabeaufforderung (cmd) als Admin")
+            print("und tippe folgenden Befehl ein, um Python zu aktualisieren:")
+            print("winget install --id Python.Python.3.11")
+            print("="*60 + "\n")
+        else:
+            print("Python 3.9+ required")
         sys.exit(1)
 
 
@@ -95,7 +105,67 @@ def ensure_pip():
         import ensurepip
         ensurepip.bootstrap()
 
+
+def check_git_windows():
+    """
+    Spezifischer Vorab-Check für Windows.
+    Installiert Git vollautomatisch im Hintergrund via winget, falls es fehlt.
+    """
+    if platform.system() != "Windows":
+        return
+
+    # Prüfen, ob Git bereits über die Standard-Erkennung erreichbar ist
+    if shutil.which("git"):
+        return
+
+    print("\n" + "="*60)
+    print("[AUTO-INSTALL] Git für Windows fehlt und wird jetzt installiert...")
+    print("[AUTO-INSTALL] Bitte warten, dieser Vorgang dauert ca. 1-2 Minuten...")
+    print("="*60 + "\n")
+
+    # Winget-Befehl für eine absolut unbemerkte (silent) Hintergrund-Installation
+    winget_cmd = [
+        "winget", "install", 
+        "--id", "Git.Git", 
+        "--exact", 
+        "--silent", 
+        "--force", 
+        "--disable-interactivity", 
+        "--accept-source-agreements", 
+        "--accept-package-agreements"
+    ]
+
+    try:
+        # Führt die Installation im Hintergrund aus (erfordert Adminrechte)
+        subprocess.run(winget_cmd, capture_output=True, text=True, check=True)
+        print("[✓] Git für Windows erfolgreich installiert!")
+        print("[SYSTEM] Aktualisiere Umgebungsvariablen im RAM...")
+
+        # Windows-Pfad live in der laufenden Python-Sitzung aktualisieren, 
+        # damit Git SOFORT einsatzbereit ist (kein Programm-Neustart nötig).
+        git_default_path = "C:\\Program Files\\Git\\cmd"
+        if git_default_path not in os.environ["PATH"]:
+            os.environ["PATH"] = git_default_path + os.pathsep + os.environ["PATH"]
+
+        # Ruft deine Pfad-Fix-Funktion auf, falls sie im Skript existiert
+        if "fix_windows_path" in globals():
+            fix_windows_path()
+
+        time.sleep(2)  # Kurze Atempause für die Festplatte
+
+    except subprocess.CalledProcessError as e:
+        print("[!] Automatische Git-Installation via winget fehlgeschlagen.")
+        print(f"[!] Fehler-Details: {e.stderr}")
+        print("[!] Bitte installiere Git manuell über https://git-scm.com")
+    except Exception as e:
+        print(f"[!] Unerwarteter Fehler bei der Git-Installation: {e}")
+
+
 def install_python_packages():
+    # WICHTIG: Bevor wir Python-Pakete prüfen oder installieren, 
+    # stellen wir sicher, dass Git auf Windows-Systemen vorhanden ist!
+    check_git_windows()
+
     missing = []
     for p in REQUIRED_PACKAGES:
         if importlib.util.find_spec(p) is None:
@@ -105,12 +175,20 @@ def install_python_packages():
         return
 
     print("Installing missing Python packages:", missing)
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "pip"])
+    
+    # Pip aktualisieren
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "pip"])
+    except Exception:
+        print("[WARNUNG] Konnte pip nicht aktualisieren, fahre mit Paketinstallation fort...")
+
+    # Fehlende Pakete installieren
     for p in missing:
         subprocess.check_call([sys.executable, "-m", "pip", "install", p])
 
-    # Restart script after installing packages
+    # Skript nach erfolgreicher Installation neu starten, damit die Module geladen werden können
     os.execv(sys.executable, [sys.executable] + sys.argv)
+
 
 def fix_windows_path():
     """Fügt Standard-Installationspfade bekannter Tools zum System-PATH hinzu (Windows)."""
@@ -777,7 +855,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "7.1.0"
+APP_VERSION = "7.2.0"
 # ===================== PATCH DIRS =====================
 def get_best_patch_dir():
     """Bestimmt den besten Patch-Ordner (S3, lokal, Home)."""
@@ -3363,7 +3441,7 @@ def clean_patch_folder(gui_instance=None, info_widget=None, progress_callback=No
     pbar = getattr(gui_instance, "progress_bar", None)
 
     # --- Styles ---
-    # Dein spezifisches Rainbow-Design
+    # Dein spezifisches Rainbow-Design - ZWINGT den Text einzeilig zu bleiben
     style_rainbow = f"""
         QProgressBar {{
             border: 2px solid #444444;
@@ -3465,15 +3543,23 @@ def clean_patch_folder(gui_instance=None, info_widget=None, progress_callback=No
         if not all_cleaned:
             bar_txt_final = "⚠️ Cleanup Partial" if not is_de else "⚠️ Teilweise bereinigt"
 
+        # FIX: Wir setzen das Textformat SOFORT beim Start des Pulsierens,
+        # damit die UI-Layouts nicht durch ein unfertiges "%p%" verwirrt werden.
+        if pbar: 
+            pbar.setFormat(bar_txt_final)
+
         def toggle():
             bg_color = "#00FF41" if state["i"] % 2 == 0 else "#0A0A0A"
             if pbar:
+                # Wir erhalten das Textformat beim Austausch der Hintergrundfarbe strikt aufrecht
                 pbar.setStyleSheet(style_rainbow.replace("background-color: #0A0A0A;", f"background-color: {bg_color};"))
+                pbar.setFormat(bar_txt_final)
             state["i"] += 1
             if state["i"] < times * 2:
                 QTimer.singleShot(200, toggle)
             else:
-                if pbar: pbar.setFormat(bar_txt_final)
+                if pbar: 
+                    pbar.setFormat(bar_txt_final)
 
         toggle()
 
@@ -3481,6 +3567,7 @@ def clean_patch_folder(gui_instance=None, info_widget=None, progress_callback=No
     pulse_green()
     log("cleanup_success", "success" if all_cleaned else "warning")
     play_sound("success" if all_cleaned else "error")
+
 
 # ===================== OSCAM-EMU GIT FUNCTIONS =====================
 def clean_oscam_emu_git(gui_instance=None, progress_callback=None):
@@ -4431,16 +4518,24 @@ class CinematicMatrixSplash(QWidget):
 
     def __init__(self, duration=4000):
         super().__init__()
+        
+        # Sicherheits-Fallback für fehlerhafte duration-Werte (Verhindert ZeroDivisionError)
+        if not duration or duration <= 0:
+            duration = 4000
+
+        # Systemspezifische Imports absichern
+        import platform
+        import random
 
         self.is_closing = False
         self.os_type = platform.system()
 
-        # animation state
+        # Animation state
         self._corner_factor = 0.0
         self.flash_alpha = 0
         self.prog = 0
 
-        # window setup
+        # Window setup
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
@@ -4452,12 +4547,12 @@ class CinematicMatrixSplash(QWidget):
         self.resize(int(screen.width() * 0.6), int(screen.height() * 0.6))
         self.move(screen.center() - self.rect().center())
 
-        # matrix config
+        # Matrix config
         self.chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$%&*+=-"
         self.columns = self.width() // 15
         self.drops = [random.randint(-20, 0) for _ in range(self.columns)]
 
-        # logo
+        # Logo Ascii Art
         self.logo_text = [
             r" ◢◤━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◥◣ ",
             r" █               _______  _______  _______  _______  __   __              █ ",
@@ -4490,7 +4585,7 @@ class CinematicMatrixSplash(QWidget):
             r" ◥◣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◢◤ "
         ]
 
-        # layout
+        # Layout setup
         main = QGridLayout(self)
         main.setContentsMargins(0, 0, 0, 0)
 
@@ -4505,9 +4600,8 @@ class CinematicMatrixSplash(QWidget):
 
         layout = QVBoxLayout(self.ui)
 
-        # header
+        # Header component
         header = QHBoxLayout()
-
         self.title = QLabel("[ CORE BOOT ]")
         self.title.setStyleSheet("color:#00FF41;")
 
@@ -4517,45 +4611,55 @@ class CinematicMatrixSplash(QWidget):
         header.addWidget(self.title)
         header.addStretch()
         header.addWidget(self.host)
-
         layout.addLayout(header)
-
         layout.addStretch()
 
-        # logo
+        # Logo widget
         self.lbl_logo = QLabel("\n".join(self.logo_text))
         self.lbl_logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_logo.setStyleSheet("color:#00FF41;")
         self.lbl_logo.setFont(QFont("Consolas", 10))
         layout.addWidget(self.lbl_logo)
-
         layout.addStretch()
 
-        # status
+        # Status text widget
         self.status = QLabel("INITIALIZING...")
         self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.status.setStyleSheet("color:#00FF41;")
         layout.addWidget(self.status)
 
-        # progress
+                # Progress bar component (Matrix Cyberpunk Redesign)
         self.pbar = QProgressBar()
         self.pbar.setMaximum(100)
         self.pbar.setTextVisible(False)
         self.pbar.setStyleSheet("""
             QProgressBar {
-                border:1px solid #00FF41;
-                background:#001100;
-                height:6px;
+                border: 1px solid rgba(0, 255, 65, 180);
+                border-radius: 3px;
+                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                                   stop:0 #000803, stop:1 #001205);
+                height: 10px;
+                /* Subtiler Matrix-Glow-Effekt nach unten */
+                margin-bottom: 5px;
             }
             QProgressBar::chunk {
-                background:#00FF41;
+                /* Neongrüner High-Tech-Farbverlauf mit Digital-Glow */
+                background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                                   stop:0 #008f11, 
+                                                   stop:0.5 #00FF41, 
+                                                   stop:1 #39FF14);
+                /* Erzeugt einen abgehackten, digitalen Block-Look */
+                width: 4px;
+                margin: 0.5px;
+                border-radius: 1px;
             }
         """)
         layout.addWidget(self.pbar)
 
+
         main.addWidget(self.ui, 0, 0)
 
-        # timers
+        # Active engine timers
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update)
         self.timer.start(30)
@@ -4568,7 +4672,7 @@ class CinematicMatrixSplash(QWidget):
         self.timer_glitch.timeout.connect(self.glitch)
         self.timer_glitch.start(120)
 
-        # corner animation
+        # Geometric corner vector animation
         self.anim = QPropertyAnimation(self, b"corner_factor")
         self.anim.setDuration(1200)
         self.anim.setStartValue(0.0)
@@ -4576,9 +4680,172 @@ class CinematicMatrixSplash(QWidget):
         self.anim.setEasingCurve(QEasingCurve.Type.OutBack)
         self.anim.start()
 
-        QTimer.singleShot(duration, self.finish)
+        # Überprüfungen nach dem Rendern triggern
+        QTimer.singleShot(400, self.run_bootstrap_checks)
 
-    # ---------------- PROPERTY ----------------
+    # ---------------- AUTOMATISCHER HINTERGRUND-CHECK IM SPLASH SCREEN ----------------
+        
+    def run_bootstrap_checks(self):
+        """Überprüft und installiert Git Core sowie alle Python-Pakete im Splash-Thread."""
+        import sys
+        import shutil
+        import subprocess
+        import platform
+        import os
+        import time
+        import importlib.util
+        import locale
+
+        # Systemsprache ermitteln
+        try:
+            sys_lang = locale.getdefaultlocale()
+            is_german = sys_lang[0].startswith("de") if (sys_lang and sys_lang[0]) else False
+        except:
+            is_german = False
+
+        anything_installed = False
+
+        # --- 1. ETAP: AUTOMATISCHE GIT-INSTALLATION FÜR WINDOWS ---
+        if platform.system() == "Windows" and not shutil.which("git"):
+            anything_installed = True
+            msg_git = (
+                ">> [KRITISCH] GIT CORE FEHLT! STARTE WINGET HINTERGRUND-INSTALLATION... <<"
+                if is_german else
+                ">> [CRITICAL] GIT CORE MISSING! RUNNING WINGET SILENT DEPLOYMENT... <<"
+            )
+            self.status.setText(msg_git)
+            self.status.setStyleSheet("color: #FF0055; font-weight: bold;")
+            QApplication.processEvents()
+            
+            winget_cmd = [
+                "winget", "install", 
+                "--id", "Git.Git", 
+                "--exact", "--silent", "--force", 
+                "--disable-interactivity", 
+                "--accept-source-agreements", 
+                "--accept-package-agreements"
+            ]
+            
+            try:
+                subprocess.run(winget_cmd, capture_output=True, text=True, check=True)
+                git_default_path = "C:\\Program Files\\Git\\cmd"
+                if git_default_path not in os.environ["PATH"]:
+                    os.environ["PATH"] = git_default_path + os.pathsep + os.environ["PATH"]
+                
+                if "fix_windows_path" in globals():
+                    fix_windows_path()
+                    
+                msg_git_ok = (
+                    ">> [✓] GIT CORE ERFOLGREICH INSTALLIERT! SYSTEMPFAD AKTUALISIERT. <<"
+                    if is_german else
+                    ">> [✓] GIT CORE DEPLOYED SUCCESSFULLY! ENVIRONMENT REFRESHED. <<"
+                )
+                self.status.setText(msg_git_ok)
+                self.status.setStyleSheet("color: #00FF41;")
+                QApplication.processEvents()
+                time.sleep(1.5)
+                
+            except Exception as e:
+                self.status.setText(f">> [!] INSTALLATION FAILED: {str(e)[:35]}... <<")
+                self.status.setStyleSheet("color: #FF0055;")
+                QApplication.processEvents()
+                time.sleep(3)
+
+        # --- 2. ETAP: PRÜFUNG & VERWALTUNG DER PYTHON PAKETE ---
+        msg_scan = (
+            "PROGNOSTIZIERE PYTHON MODUL-ABHÄNGIGKEITEN..."
+            if is_german else
+            "SCANNING Python MODULE DEPENDENCIES..."
+        )
+        self.status.setText(msg_scan)
+        self.status.setStyleSheet("color: #00FF41;")
+        QApplication.processEvents()
+        
+        missing_pkgs = []
+        pkgs_to_check = globals().get("REQUIRED_PACKAGES", ["PyQt6", "requests", "packaging", "psutil", "urllib3"])
+        
+        for p in pkgs_to_check:
+            if importlib.util.find_spec(p) is None:
+                missing_pkgs.append(p)
+
+        if missing_pkgs:
+            anything_installed = True
+            msg_pip = (
+                f">> PIP INSTALLATION LÄUFT FÜR: {', '.join(missing_pkgs)} <<"
+                if is_german else
+                f">> PIP DEPLOYMENT RUNNING FOR: {', '.join(missing_pkgs)} <<"
+            )
+            self.status.setText(msg_pip)
+            self.status.setStyleSheet("color: #00D4FF;")
+            QApplication.processEvents()
+            
+            try:
+                subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], capture_output=True)
+                for p in missing_pkgs:
+                    subprocess.run([sys.executable, "-m", "pip", "install", p], capture_output=True)
+                
+                msg_reload = (
+                    ">> INSTALLATION BEENDET. START KERNEL-HOT-RELOAD... <<"
+                    if is_german else
+                    ">> MODULE DEPLOYMENT COMPLETE. ENVIRONMENT HOT-RELOAD IN PROGRESS... <<"
+                )
+                self.status.setText(msg_reload)
+                QApplication.processEvents()
+                time.sleep(1)
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            except Exception as e:
+                self.status.setText(f"DEPENDENCY CONFLICT DETECTED: {str(e)[:35]}")
+                QApplication.processEvents()
+                time.sleep(2)
+
+        # --- FIX: VISUELLE SYNCHRONISATION DES LADEBALKENS ---
+        if not anything_installed:
+            # Den originalen, langsamen Balken-Timer stoppen
+            if hasattr(self, "timer_prog"):
+                self.timer_prog.stop()
+
+            # Text auf "Prüfung abgeschlossen" setzen, während der Balken lädt
+            msg_finishing = "COMPLETING CORE SYSTEM INTEGRATION..." if not is_german else "PROZESSIERE SYSTEM-INTEGRATION..."
+            self.status.setText(msg_finishing)
+            self.status.setStyleSheet("color: #00FF41;")
+
+            # Den Balken in einer flüssigen Schleife auf 100 hochjagen
+            while self.prog < 100:
+                self.prog += 2  # Geschwindigkeit des Hochlaufens
+                if self.prog > 100: 
+                    self.prog = 100
+                self.pbar.setValue(self.prog)
+                # Zwingt die GUI, sich sofort neu zu zeichnen (erzeugt die Animation)
+                QApplication.processEvents()
+                time.sleep(0.01)
+
+            # Erst JETZT, wo der Balken bei 100% steht, zeigen wir den "No Action Required"-Text
+            msg_verified = (
+                ">> [SYSTEM] ALLE ABHÄNGIGKEITEN ÜBERPRÜFT. KEINE AKTION ERFORDERLICH. <<"
+                if is_german else
+                ">> [SYSTEM] ALL DEPENDENCIES VERIFIED. NO ACTION REQUIRED. <<"
+            )
+            self.status.setText(msg_verified)
+            self.status.setStyleSheet("color: #00FF41; font-weight: bold;")
+            QApplication.processEvents()
+            
+            # 2,5 Sekunden halten, damit es lesbar ist
+            QTimer.singleShot(2500, lambda: self.finalize_boot(is_german))
+        else:
+            self.finalize_boot(is_german)
+
+    # WICHTIG: Diese Methode muss exakt 4 Leerzeichen eingerückt sein (so wie run_bootstrap_checks)!
+    def finalize_boot(self, is_german=False):
+        """Beendet den Ladevorgang sauber nach Ablauf der Wartezeiten."""
+        msg_release = (
+            "NEURAL LINK BEREIT. STARTE HAUPT-BENUTZEROBERFLÄCHE..."
+            if is_german else
+            "NEURAL LINK OPERATIONAL. RELEASING MAIN GUI INTERFACE..."
+        )
+        self.status.setText(msg_release)
+        self.status.setStyleSheet("color: #00FF41;")
+        QTimer.singleShot(800, self.finish)
+    # ---------------- BEREITS EXISTIERENDE SYSTEMPROPERTY-FUNKTIONEN ----------------
     @pyqtProperty(float)
     def corner_factor(self):
         return self._corner_factor
@@ -4588,18 +4855,15 @@ class CinematicMatrixSplash(QWidget):
         self._corner_factor = v
         self.update()
 
-    # ---------------- PAINT ----------------
     def paintEvent(self, event):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(0, 0, 0, 220))
-
         p.setFont(QFont("Consolas", 10))
 
-        # MATRIX
+        # MATRIX ANIMATION MATRIX RAIN ENGINE
         for i in range(len(self.drops)):
             x = i * 15
             y = self.drops[i] * 15
-
             char = random.choice(self.chars)
 
             if 0 < y < self.height():
@@ -4610,10 +4874,9 @@ class CinematicMatrixSplash(QWidget):
             if y > self.height() or random.random() > 0.98:
                 self.drops[i] = random.randint(-10, 0)
 
-        # CORNERS
+        # CHROMATIC CORNERS
         w, h = self.width(), self.height()
         off = int((1 - self._corner_factor) * 80)
-
         pen = QPen(QColor(0, 255, 65, 200))
         pen.setWidth(3)
         p.setPen(pen)
@@ -4621,39 +4884,31 @@ class CinematicMatrixSplash(QWidget):
         L = 35
         p.drawLine(off, off, off + L, off)
         p.drawLine(off, off, off, off + L)
-
         p.drawLine(w - off, off, w - off - L, off)
         p.drawLine(w - off, off, w - off, off + L)
-
         p.drawLine(off, h - off, off + L, h - off)
         p.drawLine(off, h - off, off, h - off - L)
-
         p.drawLine(w - off, h - off, w - off - L, h - off)
         p.drawLine(w - off, h - off, w - off, h - off - L)
 
-        # FLASH
         if self.flash_alpha > 0:
             p.setPen(QPen(QColor(255, 255, 255, self.flash_alpha)))
             p.drawRect(5, 5, w - 10, h - 10)
 
-    # ---------------- GLITCH ----------------
     def glitch(self):
         if self.is_closing:
             return
-
         if random.random() > 0.9:
             self.lbl_logo.setStyleSheet("color:#00FFFF;")
             self.play_sound("glitch")
         else:
             self.lbl_logo.setStyleSheet("color:#00FF41;")
 
-    # ---------------- PROGRESS ----------------
     def update_progress(self):
         if self.prog < 100:
             self.prog += 1
             self.pbar.setValue(self.prog)
 
-    # ---------------- SOUND ----------------
     def play_sound(self, mode):
         def run():
             try:
@@ -4662,26 +4917,24 @@ class CinematicMatrixSplash(QWidget):
                         winsound.Beep(random.randint(800, 2000), 20)
                     elif mode == "end":
                         winsound.MessageBeep()
-
-                elif self.os_type == "Linux":
-                    print("\a", end="")
-
-                elif self.os_type == "Darwin":
+                elif self.os_type in ["Linux", "Darwin"]:
                     print("\a", end="")
             except:
                 pass
-
         threading.Thread(target=run, daemon=True).start()
 
-    # ---------------- FINISH ----------------
     def finish(self):
         self.is_closing = True
         self.play_sound("end")
         QTimer.singleShot(300, lambda: (self.finished.emit(), self.close()))
 
+
+
+
 class PatchManagerGUI(QWidget):
     def __init__(self):
         # 1. IMPORTS & INITIALER SCHUTZ
+        from PyQt6.QtGui import QFont, QFontMetrics
         from PyQt6.QtGui import QColor, QFont, QTextCursor, QIcon
         from PyQt6.QtCore import Qt, QTimer, QDateTime, QSize, QUrl
         from PyQt6.QtWidgets import QLabel, QTextEdit, QVBoxLayout
@@ -4819,7 +5072,7 @@ class PatchManagerGUI(QWidget):
             self.color_box.currentIndexChanged.connect(self.change_colors)
 
         self.update_language()
-        self.change_colors()
+        #self.change_colors()
 
         # Theme-Status ohne Blinken anwenden
         target_theme = self.current_config.get("theme_mode", "standard")
@@ -4996,11 +5249,162 @@ class PatchManagerGUI(QWidget):
         self._idle_anim.valueChanged.connect(update_style)
         self._idle_anim.start()
 
+    def _run_grid_action(self, key, func):
+        """Führt eine Grid-Aktion ausschließlich nach echtem Button-Klick aus."""
+
+        print(f"[GRID CLICK] {key}")
+
+        try:
+            self.set_active_button(key)
+        except Exception as e:
+            print(f"[GRID] set_active_button Fehler bei {key}: {e}")
+
+        try:
+            func()
+        except Exception as e:
+            print(f"[GRID] Aktion {key} fehlgeschlagen: {e}")
+    
     def create_buttons(self):
         self.btn_s3 = QPushButton("🚀 Install S3")
         self.btn_s4 = QPushButton("🚀 Install S4")
         self.btn_ncam = QPushButton("🚀 Install NCam-speedy")
     
+    def _fit_all_button_texts(self):
+        """
+        Passt ALLE Buttons an die aktuell berechnete Fensterbreite an.
+        Wird mehrfach beim Start und nach Resize ausgeführt.
+        """
+        buttons = []
+
+        # ---------------------------------------------------------
+        # GRID / PATCH BUTTONS
+        # ---------------------------------------------------------
+        try:
+            grid_buttons = getattr(self, "buttons", {})
+            if isinstance(grid_buttons, dict):
+                for btn in grid_buttons.values():
+                    if btn is not None:
+                        buttons.append(btn)
+        except Exception:
+            pass
+
+        # ---------------------------------------------------------
+        # OPTION BUTTONS
+        # ---------------------------------------------------------
+        try:
+            option_buttons = getattr(self, "option_buttons", {})
+            if isinstance(option_buttons, dict):
+                for item in option_buttons.values():
+                    if isinstance(item, (tuple, list)):
+                        btn = item[0] if item else None
+                    else:
+                        btn = item
+                    if btn is not None:
+                        buttons.append(btn)
+        except Exception:
+            pass
+
+        # ---------------------------------------------------------
+        # SONDERBUTTONS
+        # ---------------------------------------------------------
+        for attr in (
+            "btn_s3",
+            "btn_s4",
+            "btn_ncam",
+            "btn_modifier",
+            "btn_patch_online",
+        ):
+            try:
+                btn = getattr(self, attr, None)
+                if btn is not None:
+                    buttons.append(btn)
+            except Exception:
+                pass
+
+        # ---------------------------------------------------------
+        # Doppelte Buttons entfernen & Kürzung anwenden
+        # ---------------------------------------------------------
+        seen = set()
+        for btn in buttons:
+            try:
+                ident = id(btn)
+                if ident in seen:
+                    continue
+                seen.add(ident)
+                self._fit_button_text(btn)
+            except RuntimeError:
+                pass
+            except Exception as e:
+                print(f"[_fit_all_button_texts] Fehler: {e}")
+
+    def _fit_button_text(self, btn):
+        """
+        FINALE BEREINIGUNG: Erhält die volle Textlänge und Einzeiligkeit,
+        stellt aber die korrekten Farben, Ränder und Styles der Buttons im Grid wieder her.
+        """
+        from PyQt6.QtWidgets import QPushButton
+        from PyQt6.QtGui import QFont
+
+        try:
+            if not isinstance(btn, QPushButton):
+                return
+
+            text = btn.text().strip()
+            if not text:
+                return
+
+            # 1. TEXT-REPARATUR (Alte Pünktchen-Kürzungen entfernen)
+            if "..." in text:
+                cleaned_text = text.replace("...", "").strip()
+                btn.setText(cleaned_text)
+                if hasattr(btn, "_original_text"):
+                    btn._original_text = cleaned_text
+
+            # 2. FESTE SCHRIFTGRÖSSE SETZEN (Kein Berechnungs-Kollaps)
+            fixed_font = QFont(btn.font())
+            fixed_font.setBold(True)
+            fixed_font.setWordSpacing(0)
+            
+            status_indicators = ["⏳", "⚙️", "🔄", "⚡", "📁", "💾", "🛠️", "✅"]
+            is_action = any(ind in text for ind in status_indicators)
+
+            # Kompakt bei langen Texten, Standard bei kurzen
+            if len(text) > 16 or is_action:
+                fixed_font.setPointSize(10)
+                fixed_font.setStretch(98)
+            else:
+                fixed_font.setPointSize(11)
+                fixed_font.setStretch(100)
+
+            if btn.font().pointSize() != fixed_font.pointSize() or btn.font().stretch() != fixed_font.stretch():
+                btn.setFont(fixed_font)
+
+            # 3. STYLESHEET REWARDS (Farben & Design schützen)
+            old_style = btn.styleSheet() or ""
+            
+            # Wir prüfen, ob unser spezifischer Text-Schutz schon aktiv ist.
+            if "white-space" not in old_style.lower():
+                # Wir betten den Schutz so ein, dass er bestehende Hintergrundfarben NICHT überschreibt
+                text_protection_css = """
+                    white-space: nowrap !important;
+                    text-align: center !important;
+                """
+                btn.setStyleSheet(old_style + "\n" + text_protection_css)
+
+            # 4. PLATZHÄRTUNG IM LAYOUT
+            min_width_needed = btn.sizeHint().width() + 12
+            if btn.minimumWidth() < min_width_needed:
+                btn.setMinimumWidth(min_width_needed)
+                
+            if btn.minimumHeight() < 46:
+                btn.setMinimumHeight(46)
+
+            btn.update()
+
+        except Exception as e:
+            print(f"[_fit_button_text] Visueller Fehler blockiert: {e}")
+
+
     def fix_all_tool_permissions(self, **kwargs):
         """Setzt rekursiv Schreibrechte mit ProgressBar, Sound und Sprachprüfung."""
         import os
@@ -8130,154 +8534,526 @@ class PatchManagerGUI(QWidget):
 
     def change_colors(self):
         """
-        Aktualisiert das Farbschema und erzwingt den LED-Status.
-        FIX 1: Verhindert Ghost-Blinking, indem LED-Zustände NACH dem Repaint erzwungen werden.
-        FIX 2: Verhindert Zurückspringen auf Classics beim Start durch intelligentes Config-Fallback.
-        FIX 3: Synchronisiert theme_mode für Matrix_Pro & schützt Installations-Buttons vor Farb-Überschreibung.
+        Aktualisiert das komplette Farbschema der GUI.
+
+        Funktionen:
+        - Liest die aktuell gewählte Farbe sicher aus der Config/ComboBox.
+        - Aktualisiert current_diff_colors zentral.
+        - Repaintet die normalen Buttons.
+        - Schützt S3/S4/NCam-Installationsbuttons vor Theme-Überschreibung.
+        - Aktualisiert Checkbox, Header, Badges und Status.
+        - Setzt den LED-Zustand nach dem Repaint erneut.
+        - Synchronisiert theme_mode mit dem gewählten Theme.
+        - Speichert die Änderung zentral.
         """
 
-        # --- Final-Label ausblenden ---
-        if hasattr(self, "hide_final_label"):
-            self.hide_final_label()
-        elif hasattr(self, "final_label") and self.final_label:
-            self.final_label.hide()
+        from PyQt6.QtWidgets import QPushButton
+
         global current_diff_colors, current_color_name
 
-        # 1️⃣ Aktuelle Farbe ermitteln (Sicherer Abgleich zwischen GUI-Box und Config-Datei)
-        config_obj = getattr(self, "cfg", getattr(self, "current_config", {}))
+        # ============================================================
+        # 0. FINAL LABEL AUSBLENDEN
+        # ============================================================
+        try:
+            if hasattr(self, "hide_final_label"):
+                self.hide_final_label()
+            elif getattr(self, "final_label", None):
+                self.final_label.hide()
+        except RuntimeError:
+            pass
+
+        # ============================================================
+        # 1. CONFIG SICHER ERMITTELN
+        # ============================================================
+        config_obj = getattr(
+            self,
+            "cfg",
+            getattr(self, "current_config", {})
+        )
+
+        if not isinstance(config_obj, dict):
+            config_obj = {}
+
         saved_color = config_obj.get("color", "Classics")
 
-        # Wenn das Tool noch im Startvorgang lädt, erzwingen wir den echten Wert aus der JSON.
-        # Das verhindert, dass die noch nicht initialisierte ComboBox blind "Classics" triggert.
-        if getattr(self, "is_loading", False) or not hasattr(self, "color_box") or not self.color_box.currentText():
-            current_color_name = saved_color
-        else:
-            current_color_name = self.color_box.currentText()
+        # ============================================================
+        # 2. AKTUELLE FARBE ERMITTELN
+        # ============================================================
+        color_from_combo = ""
 
-        # 2️⃣ Basis-Farben & 3️⃣ Vorbereitung
-        base_colors = DIFF_COLORS.get(
-            current_color_name,
-            DIFF_COLORS.get("Classics", {"bg": "#2F2F2F", "fg": "#FFFFFF"}),
-        )
+        try:
+            if hasattr(self, "color_box") and self.color_box:
+                color_from_combo = self.color_box.currentText().strip()
+        except RuntimeError:
+            color_from_combo = ""
+
+        # Während des Startvorgangs niemals eine leere/noch nicht
+        # initialisierte ComboBox verwenden.
+        if getattr(self, "is_loading", False):
+            current_color_name = saved_color
+        elif color_from_combo:
+            current_color_name = color_from_combo
+        else:
+            current_color_name = saved_color
+
+        # ============================================================
+        # 3. THEME SUCHEN
+        # ============================================================
+        base_colors = DIFF_COLORS.get(current_color_name)
+
+        # Fallback, falls Theme-Key nicht existiert
+        if not base_colors:
+            base_colors = DIFF_COLORS.get(
+                saved_color,
+                DIFF_COLORS.get(
+                    "Classics",
+                    {
+                        "bg": "#2F2F2F",
+                        "fg": "#FFFFFF",
+                        "hover": "#444444",
+                        "active": "#222222",
+                    },
+                ),
+            )
+
+        # ============================================================
+        # 4. FARBEN ZENTRAL AUFBAUEN
+        # ============================================================
         bg = base_colors.get("bg", "#2F2F2F")
-        fg = base_colors.get("fg", "#EAFF00")
+        fg = base_colors.get(
+            "fg",
+            base_colors.get("text", "#FFFFFF")
+        )
+
+        hover = base_colors.get("hover")
+
+        if not hover:
+            if hasattr(self, "adjust_color"):
+                hover = self.adjust_color(bg, 1.20)
+            else:
+                hover = bg
+
+        active = base_colors.get("active")
+
+        if not active:
+            if hasattr(self, "adjust_color"):
+                active = self.adjust_color(bg, 0.80)
+            else:
+                active = bg
 
         current_diff_colors = {
             **base_colors,
-            "hover": base_colors.get(
-                "hover",
-                self.adjust_color(bg, 1.2) if hasattr(self, "adjust_color") else bg,
-            ),
-            "active": base_colors.get(
-                "active",
-                self.adjust_color(bg, 0.8) if hasattr(self, "adjust_color") else bg,
-            ),
+            "bg": bg,
+            "fg": fg,
+            "text": base_colors.get("text", fg),
+            "hover": hover,
+            "active": active,
         }
 
-        # Sound-Feedback
-        if "safe_play" in globals():
-            safe_play("dialog-information.oga")
+        # ============================================================
+        # 5. SOUND
+        # ============================================================
+        try:
+            safe_play_func = globals().get("safe_play")
+            if safe_play_func:
+                safe_play_func("dialog-information.oga")
+        except Exception:
+            pass
 
-        # 4️⃣ FARBEN IM UI ANWENDEN
+        # ============================================================
+        # 6. ALLGEMEINES REPAINT
+        # ============================================================
+        try:
+            if hasattr(self, "repaint_ui_colors"):
+                self.repaint_ui_colors()
+        except Exception:
+            pass
 
-        # A) Zuerst das allgemeine Repaint (Labels, Header, etc.)
-        if hasattr(self, "repaint_ui_colors"):
-            self.repaint_ui_colors()
 
-        # B) Spezifische Button-Styles (Überschreibt das Fenster-Stylesheet gezielt)
-        button_style = f"""
-            QPushButton {{ 
-                color: {fg} !important; background-color: #3d3d3d; border: 1px solid #555; 
-                border-radius: 8px; padding: 6px; font-weight: 700; font-size: 13pt; 
+        # ============================================================
+        # 7. AKTIVEN GRID-BUTTON WIEDERHERSTELLEN
+        # ============================================================
+        active_key = getattr(self, "active_button_key", None)
+
+        if active_key and hasattr(self, "buttons"):
+            active_btn = self.buttons.get(active_key)
+
+            if active_btn:
+                try:
+                    active_btn.setStyleSheet(
+                        f"""
+                        QPushButton {{
+                            background-color: #00FF00;
+                            color: #000000;
+                            border-radius: {getattr(self, "BUTTON_RADIUS", 8)}px;
+                            min-height: {getattr(self, "BUTTON_HEIGHT", 42)}px;
+                            font-weight: bold;
+                            border: 2px solid white;
+                            padding: 5px 8px;
+                        }}
+
+                        QPushButton:hover {{
+                            background-color: #39FF39;
+                            color: #000000;
+                            border: 2px solid white;
+                        }}
+
+                        QPushButton:pressed {{
+                            background-color: #00CC00;
+                            color: #000000;
+                        }}
+                        """
+                    )
+                except RuntimeError:
+                    pass
+
+
+
+        # ============================================================
+        # 8. AKTIVEN GRID-BUTTON WIEDERHERSTELLEN
+        #
+        # repaint_ui_colors() setzt alle Buttons zurück.
+        # Deshalb aktiven Button danach erneut hervorheben.
+        # ============================================================
+        active_key = getattr(self, "active_button_key", None)
+
+        if active_key and hasattr(self, "buttons"):
+            active_btn = self.buttons.get(active_key)
+
+            if active_btn:
+                try:
+                    active_btn.setStyleSheet(
+                        f"""
+                        QPushButton {{
+                            background-color: #00FF00;
+                            color: #000000;
+                            border-radius: {getattr(self, "BUTTON_RADIUS", 8)}px;
+                            min-height: {getattr(self, "BUTTON_HEIGHT", 42)}px;
+                            font-weight: bold;
+                            border: 2px solid white;
+                            padding: 5px 8px;
+                        }}
+
+                        QPushButton:hover {{
+                            background-color: #39FF39;
+                            color: #000000;
+                            border: 2px solid white;
+                        }}
+
+                        QPushButton:pressed {{
+                            background-color: #00CC00;
+                            color: #000000;
+                        }}
+                        """
+                    )
+                except RuntimeError:
+                    pass
+
+        # ============================================================
+        # 9. INSTALLATIONSBUTTONS EXPLIZIT SCHÜTZEN
+        #
+        # Ihre individuelle Farbe bleibt erhalten.
+        # ============================================================
+        for attr_name in ("btn_s3", "btn_s4", "btn_ncam"):
+
+            btn = getattr(self, attr_name, None)
+
+            if not btn:
+                continue
+
+            try:
+                # Vorhandenes individuelles Styling NICHT verändern.
+                # Falls der Button noch keinen Style besitzt,
+                # bekommt er einen neutralen Fallback.
+                if not btn.styleSheet().strip():
+
+                    btn.setStyleSheet(
+                        f"""
+                        QPushButton {{
+                            text-align: left;
+                            padding-left: 8px;
+                            font-weight: bold;
+                            background-color: {bg};
+                            color: {fg};
+                            border: 1px solid {fg};
+                            border-radius: 8px;
+                        }}
+                        """
+                    )
+
+
+            except RuntimeError:
+                pass
+
+        # ============================================================
+        # 10. TELEMETRIE CHECKBOX
+        # ============================================================
+        telemetry_cb = getattr(self, "telemetry_cb", None)
+
+        if telemetry_cb:
+
+            try:
+                telemetry_cb.setStyleSheet(
+                    f"""
+                    QCheckBox {{
+                        background-color: {bg};
+                        color: {fg};
+                        border: 1px solid {fg};
+                        border-radius: 4px;
+                        padding: 5px 10px;
+                        font-weight: 700;
+                    }}
+
+                    QCheckBox:hover {{
+                        background-color: {hover};
+                    }}
+
+                    QCheckBox::indicator {{
+                        width: 16px;
+                        height: 16px;
+                        border: 1px solid {fg};
+                        border-radius: 3px;
+                        background-color: transparent;
+                    }}
+
+                    QCheckBox::indicator:hover {{
+                        border: 1px solid white;
+                    }}
+
+                    QCheckBox::indicator:checked {{
+                        background-color: {fg};
+                        border: 1px solid white;
+                    }}
+                    """
+                )
+
+            except RuntimeError:
+                pass
+
+        # ============================================================
+        # 11. HEADER CONTAINER
+        # ============================================================
+        header_container = getattr(self, "header_container", None)
+
+        if header_container:
+
+            try:
+                header_container.setStyleSheet(
+                    f"""
+                    QFrame {{
+                        background-color: {bg};
+                        border: 1px solid #444444;
+                        border-radius: 8px;
+                    }}
+                    """
+                )
+            except RuntimeError:
+                pass
+
+        # ============================================================
+        # 12. BADGES
+        # ============================================================
+        badge_style = f"""
+            QFrame {{
+                background-color: {bg};
+                border: 1px solid #444444;
+                border-radius: 6px;
             }}
-            QPushButton:hover {{ 
-                background-color: #4d4d4d; border: 1px solid {fg}; color: white !important; 
+
+            QFrame:hover {{
+                border: 1px solid {fg};
             }}
         """
-        
-        # AUSNAHME: Die 3 neuen Installations-Buttons müssen orange bleiben und werden geschützt!
-        ignored_buttons = ["btn_s3", "btn_s4", "btn_ncam"]
-        for btn in self.findChildren(QPushButton):
-            if btn.objectName() in ignored_buttons or any(getattr(self, name, None) == btn for name in ignored_buttons):
-                continue  # Überspringe das Einfärben für diese Buttons, damit das Layout greift
-            btn.setStyleSheet(button_style)
 
-        # C) Stats-Checkbox Styling
-        if hasattr(self, "telemetry_cb") and self.telemetry_cb:
-            self.telemetry_cb.setStyleSheet(
-                f"QCheckBox {{ color: {fg}; background-color: {bg}; border: 1px solid {fg}; border-radius: 4px; padding: 5px 10px; font-weight: 700; }} "
-                f"QCheckBox::indicator {{ width: 16px; height: 16px; border: 1px solid {fg}; border-radius: 3px; background: transparent; }} "
-                f"QCheckBox::indicator:checked {{ background-color: {fg}; border: 1px solid white; }}"
-            )
+        left_badge = getattr(self, "left_badge", None)
 
-        # D) Header Container
-        if hasattr(self, "header_container"):
-            self.header_container.setStyleSheet(
-                f"background-color: {bg}; border-radius: 8px; border: 1px solid #444;"
-            )
+        if left_badge:
+            try:
+                left_badge.setStyleSheet(badge_style)
+            except RuntimeError:
+                pass
 
-        # =====================================================================
-        # 🚨 DER LED-FIX: STATUS ALS ALLERLETZTES ERZWINGEN 🚨
-        # =====================================================================
+        right_badge = getattr(self, "right_badge", None)
+
+        if right_badge:
+            try:
+                right_badge.setStyleSheet(
+                    f"""
+                    QFrame {{
+                        background-color: transparent;
+                        border: 1px solid #444444;
+                        border-radius: 6px;
+                    }}
+
+                    QFrame:hover {{
+                        border: 1px solid {fg};
+                    }}
+                    """
+                )
+            except RuntimeError:
+                pass
+
+        # ============================================================
+        # 13. HEADER LABEL
+        # ============================================================
+        header_label = getattr(self, "header_label", None)
+
+        if header_label:
+
+            try:
+                header_label.setStyleSheet(
+                    f"""
+                    QLabel {{
+                        color: {fg};
+                        font-weight: bold;
+                        font-size: 15px;
+                        background: transparent;
+                        border: none;
+                    }}
+                    """
+                )
+            except RuntimeError:
+                pass
+
+        # ============================================================
+        # 14. STATUS LABEL
+        # ============================================================
+        status_label = getattr(self, "status_label", None)
+
+        if status_label:
+
+            try:
+                status_label.setStyleSheet(
+                    f"""
+                    QLabel {{
+                        color: {fg};
+                        font-weight: bold;
+                        font-size: 18px;
+                        background: transparent;
+                        border: none;
+                    }}
+                    """
+                )
+            except RuntimeError:
+                pass
+
+        # ============================================================
+        # 15. LED-STATUS ERZWINGEN
+        #
+        # MUSS NACH DEM REPAINT KOMMEN.
+        # ============================================================
         is_led_enabled = config_obj.get("led_enabled", True)
 
-        if hasattr(self, "blink_timer"):
-            self.blink_timer.stop()
+        blink_timer = getattr(self, "blink_timer", None)
 
-        if hasattr(self, "force_user_leds_static"):
-            self.force_user_leds_static()
+        if blink_timer:
 
+            try:
+                blink_timer.stop()
+            except RuntimeError:
+                pass
+
+        # LEDs zuerst in definierten statischen Zustand bringen
+        try:
+            if hasattr(self, "force_user_leds_static"):
+                self.force_user_leds_static()
+        except Exception:
+            pass
+
+        # Danach Blinkbetrieb wieder aktivieren
         if is_led_enabled:
-            speed_val = (
-                self.slider_speed.value() if hasattr(self, "slider_speed") else 500
-            )
-            if 10 <= speed_val < 950:
-                if hasattr(self, "blink_timer"):
-                    self.blink_timer.start(speed_val)
-                    
-        # E) Badges & Titel Styling
-        badge_style = f"""
-            QFrame {{ background-color: {bg}; border: 1px solid #444; border-radius: 6px; }}
-            QFrame:hover {{ border: 1px solid {fg}; }}
-        """
 
-        if hasattr(self, "left_badge"):
-            self.left_badge.setStyleSheet(badge_style)
+            try:
+                slider = getattr(self, "slider_speed", None)
 
-        if hasattr(self, "header_label"):
-            self.header_label.setStyleSheet(
-                f"QLabel {{ color: {fg}; font-weight: bold; font-size: 15px; background: transparent; border: none; }}"
-            )
+                speed_val = slider.value() if slider else 500
 
-        if hasattr(self, "right_badge"):
-            self.right_badge.setStyleSheet(
-                f"QFrame {{ background-color: transparent; border: 1px solid #444; border-radius: 6px; }} QFrame:hover {{ border: 1px solid {fg}; }}"
-            )
-            if hasattr(self, "status_label"):
-                self.status_label.setStyleSheet(
-                    f"color: {fg}; font-weight: bold; font-size: 18px; background: transparent;"
-                )
-        # =====================================================================
+                if 10 <= speed_val < 950 and blink_timer:
+                    blink_timer.start(speed_val)
 
-        # 5️⃣ ZENTRAL SPEICHERN & MATRIX_PRO MODUS SYNCHRONISIEREN
+            except (RuntimeError, ValueError, TypeError):
+                pass
+
+        # ============================================================
+        # 16. CONFIG AKTUALISIEREN
+        # ============================================================
+        old_color = config_obj.get("color")
+
+        config_changed = old_color != current_color_name
+
+        if config_changed:
+            config_obj["color"] = current_color_name
+
+            # Nur bei tatsächlicher Farbänderung Theme-Modus neu setzen
+            if "matrix" in str(current_color_name).lower():
+                config_obj["theme_mode"] = "matrix"
+            else:
+                config_obj["theme_mode"] = "standard"
+
+
+        # ============================================================
+        # 17. INSTANZEN SYNCHRONISIEREN
+        # ============================================================
+        try:
+            if hasattr(self, "cfg"):
+                self.cfg = config_obj
+
+            if hasattr(self, "current_config"):
+                self.current_config = config_obj
+
+        except Exception:
+            pass
+
+        # ============================================================
+        # 18. SPEICHERN
+        #
+        # Während des Startvorgangs nicht unnötig speichern.
+        # ============================================================
         if not getattr(self, "is_loading", False):
-            if config_obj.get("color") != current_color_name:
-                config_obj["color"] = current_color_name
-                
-                # Wenn Matrix_Pro gewählt ist, erzwingen wir "matrix" für den theme_mode
-                if "matrix" in str(current_color_name).lower():
-                    config_obj["theme_mode"] = "matrix"
-                else:
-                    config_obj["theme_mode"] = "standard"
-                
-                # Instanz-Zuweisung aktualisieren
-                if hasattr(self, "cfg"):
-                    self.cfg = config_obj
-                if hasattr(self, "current_config"):
-                    self.current_config = config_obj
 
-                if "save_config" in globals():
-                    save_config(config_obj, gui_instance=self, silent=True)
+            try:
+                save_config_func = globals().get("save_config")
+
+                if save_config_func:
+                    save_config_func(
+                        config_obj,
+                        gui_instance=self,
+                        silent=True
+                    )
+
+            except Exception as e:
+                print(f"[change_colors] Config konnte nicht gespeichert werden: {e}")
+
+        # ============================================================
+        # 19. BUTTON-TEXTE NACH THEME/STYLE SICHER ANPASSEN
+        # ============================================================
+        try:
+            from PyQt6.QtCore import QTimer
+
+            if hasattr(self, "_fit_all_button_texts"):
+
+                # Nach dem ersten Theme-Repaint
+                QTimer.singleShot(
+                    100,
+                    self._fit_all_button_texts
+                )
+
+                # Nach Sprach-/Layout-Updates
+                QTimer.singleShot(
+                    500,
+                    self._fit_all_button_texts
+                )
+
+                # Nach vollständiger GUI-Initialisierung
+                QTimer.singleShot(
+                    1000,
+                    self._fit_all_button_texts
+                )
+
+        except Exception as e:
+            print(f"[change_colors] Button-Text-Anpassung fehlgeschlagen: {e}")
+
+
 
 
 
@@ -9545,9 +10321,9 @@ class PatchManagerGUI(QWidget):
         from PyQt6.QtWidgets import QStyle, QSizePolicy, QPushButton
 
         # Text-Formatierung: Bei mehr als 12 Zeichen Umbruch für Icons
-        display_text = text.replace(" ", "\n") if len(text) > 12 else text
+        display_text = text
         btn = QPushButton(display_text, parent)
-
+        btn.setProperty("action_button", True)
         # --- ICON LOGIK (WINDOWS & LINUX SAFE) ---
         if icon_name:
             icon = QIcon()
@@ -9580,7 +10356,7 @@ class PatchManagerGUI(QWidget):
             QPushButton {{
                 background-color: {color}; color: {fg}; border-radius: {radius}px;
                 border: 1px solid rgba(255,255,255,0.1); padding: 5px;
-                font-weight: bold; font-size: 12px; min-height: {min_height}px;
+                font-weight: bold; min-height: {min_height}px;
             }}
             QPushButton:hover {{
                 background-color: {hover_color};
@@ -9590,7 +10366,7 @@ class PatchManagerGUI(QWidget):
             }} 
             QPushButton:pressed {{
                 background-color: {pressed_color};
-                padding-top: 7px; padding-left: 7px; /* Klick-Animation */
+                border: 2px solid white;
             }} 
         """
         )
@@ -9711,9 +10487,15 @@ class PatchManagerGUI(QWidget):
 
     def setup_option_buttons(self, parent_layout):
         """Erstellt die mittleren Buttons mit HTML-Tooltips, Regenbogen-Progress und Sound."""
-        from PyQt6.QtWidgets import QGridLayout, QWidget, QSizePolicy, QApplication, QPushButton
+        from PyQt6.QtWidgets import (
+            QGridLayout,
+            QWidget,
+            QSizePolicy,
+            QApplication,
+            QPushButton,
+        )
         from PyQt6.QtGui import QFont
-        from PyQt6.QtCore import Qt, QTimer
+        from PyQt6.QtCore import QTimer
 
         # Sprache abrufen
         lang = str(getattr(self, "LANG", "de")).lower()[:2]
@@ -9812,7 +10594,7 @@ class PatchManagerGUI(QWidget):
             ),
             (
                 "s3_menu",
-                " s3_simplebuild",
+                "s3_simplebuild",
                 "#EAFF00",
                 self.start_s3_menu,
                 "black",
@@ -9820,10 +10602,9 @@ class PatchManagerGUI(QWidget):
                 "🚀 <b>S3 Menü:</b> Öffnet das Standard s3_simplebuild Terminal.",
                 "🚀 <b>S3 Menu:</b> Opens the standard s3_simplebuild terminal.",
             ),
-            # ✅ S4 BUTTON HIER EINGEFÜGT (direkt vor Fix Permissions)
             (
                 "s4_menu",
-                " s4_simplebuild",
+                "s4_simplebuild",
                 "#00E5FF",
                 self.start_s4_menu,
                 "black",
@@ -9831,10 +10612,9 @@ class PatchManagerGUI(QWidget):
                 "🚀 <b>S4 Menü:</b> Öffnet das S4 Simplebuild Terminal.",
                 "🚀 <b>S4 Menu:</b> Opens the S4 Simplebuild terminal.",
             ),
-
             (
                 "ncam_menu",
-                " NCam Bonecrew",
+                "NCam Bonecrew",
                 "#FF8C00",
                 self.start_ncam_menu,
                 "black",
@@ -9842,10 +10622,9 @@ class PatchManagerGUI(QWidget):
                 "🏴‍☠️ <b>NCam:</b> Startet das spezialisierte NCam Bonecrew Menü.",
                 "🏴‍☠️ <b>NCam:</b> Launches the specialized NCam Bonecrew menu.",
             ),
-
             (
                 "fix_perms",
-                " Fix Permissions",
+                "Fix Permissions",
                 "#D3D3D3",
                 self.fix_all_tool_permissions,
                 "black",
@@ -9856,21 +10635,40 @@ class PatchManagerGUI(QWidget):
         ]
 
         container = QWidget()
+
         options_grid = QGridLayout(container)
         options_grid.setSpacing(6)
         options_grid.setContentsMargins(0, 5, 0, 5)
 
         if not hasattr(self, "all_buttons"):
             self.all_buttons = []
+
         self.option_buttons = getattr(self, "option_buttons", {})
 
+        # Immer 5 Buttons pro Reihe
         cols_per_row = 5
+
+        # Einheitliche Höhe
         FLACH_HEIGHT = 50
 
-        for idx, (key, text_key, color, callback, fg, icon, tt_de, tt_en) in enumerate(button_defs):
+        # ---------------------------------------------------------
+        # BUTTONS ERSTELLEN
+        # ---------------------------------------------------------
+        for idx, (
+            key,
+            text_key,
+            color,
+            callback,
+            fg,
+            icon,
+            tt_de,
+            tt_en,
+        ) in enumerate(button_defs):
 
             raw_text = (
-                self.get_t(text_key, text_key) if hasattr(self, "get_t") else text_key
+                self.get_t(text_key, text_key)
+                if hasattr(self, "get_t")
+                else text_key
             )
 
             btn = QPushButton(raw_text)
@@ -9878,43 +10676,72 @@ class PatchManagerGUI(QWidget):
             if key == "fix_perms":
                 self.btn_fix_perms = btn
 
+            # -----------------------------------------------------
+            # CALLBACK
+            # -----------------------------------------------------
             def create_cb(c, k=key):
                 def wrapper():
+
                     if "safe_play" in globals():
                         safe_play("service-login.oga")
 
                     pbar = getattr(self, "progress_bar", None)
+
                     if pbar:
                         rainbow = (
-                            "qlineargradient(x1:0, y1:0, x2:1, y2:0, "
-                            "stop:0.0 #FF0000, stop:0.2 #FF7F00, stop:0.4 #FFFF00, "
-                            "stop:0.6 #00FF00, stop:0.8 #0000FF, stop:1.0 #8B00FF);"
+                            "qlineargradient("
+                            "x1:0, y1:0, x2:1, y2:0, "
+                            "stop:0.0 #FF0000, "
+                            "stop:0.2 #FF7F00, "
+                            "stop:0.4 #FFFF00, "
+                            "stop:0.6 #00FF00, "
+                            "stop:0.8 #0000FF, "
+                            "stop:1.0 #8B00FF);"
                         )
+
                         pbar.setStyleSheet(
                             f"""
                             QProgressBar {{
-                                text-align: center; font-weight: 700; border: 2px solid #222;
-                                border-radius: 6px; background-color: #111; color: black;
+                                text-align: center;
+                                font-weight: 700;
+                                border: 2px solid #222;
+                                border-radius: 6px;
+                                background-color: #111;
+                                color: black;
                                 font-size: 15pt;
                             }}
-                            QProgressBar::chunk {{ background-color: {rainbow}; border-radius: 4px; }}
+
+                            QProgressBar::chunk {{
+                                background-color: {rainbow};
+                                border-radius: 4px;
+                            }}
                             """
                         )
-                        msg = "Verarbeite..." if is_de else "Processing..."
+
+                        msg = (
+                            "Verarbeite..."
+                            if is_de
+                            else "Processing..."
+                        )
+
                         pbar.setFormat(f"⚙️ {msg} %p%")
                         pbar.setValue(15)
                         pbar.show()
+
                         QApplication.processEvents()
 
                     try:
+
                         if hasattr(c, "__self__") or k == "online_patch_dl":
                             c()
+
                         else:
                             callback_func = getattr(
                                 self,
                                 "upload_progress_with_speed",
                                 pbar.setValue if pbar else None,
                             )
+
                             c(
                                 gui_instance=self,
                                 info_widget=self.info_text,
@@ -9926,25 +10753,42 @@ class PatchManagerGUI(QWidget):
 
                         if pbar:
                             pbar.setValue(100)
-                            pbar.setFormat("✅ OK!" if is_de else "✅ Done!")
+                            pbar.setFormat(
+                                "✅ OK!"
+                                if is_de
+                                else "✅ Done!"
+                            )
 
                     except Exception as e:
+
                         if "safe_play" in globals():
                             safe_play("dialog-error.oga")
+
                         if pbar:
                             pbar.setStyleSheet(
-                                "QProgressBar { color: red; font-weight: 700; }"
+                                """
+                                QProgressBar {
+                                    color: red;
+                                    font-weight: 700;
+                                }
+                                """
                             )
+
                         print(f"Fehler bei {k}: {e}")
 
                     if pbar:
                         QTimer.singleShot(
                             3000,
-                            self.pbar_idle if hasattr(self, "pbar_idle") else lambda: pbar.setValue(0),
+                            self.pbar_idle
+                            if hasattr(self, "pbar_idle")
+                            else lambda: pbar.setValue(0),
                         )
 
                 return wrapper
 
+            # -----------------------------------------------------
+            # BUTTON ERSTELLEN
+            # -----------------------------------------------------
             btn = self.create_action_button(
                 parent=self,
                 text=raw_text,
@@ -9957,7 +10801,12 @@ class PatchManagerGUI(QWidget):
                 radius=getattr(self, "BUTTON_RADIUS", 10),
             )
 
-            btn.setToolTip(tt_de if is_de else tt_en)
+            # -----------------------------------------------------
+            # TOOLTIP
+            # -----------------------------------------------------
+            btn.setToolTip(
+                tt_de if is_de else tt_en
+            )
 
             btn.setStyleSheet(
                 btn.styleSheet()
@@ -9973,44 +10822,135 @@ class PatchManagerGUI(QWidget):
                 """
             )
 
+            # -----------------------------------------------------
+            # WICHTIG:
+            # TEXT NICHT UMBRECHEN
+            # -----------------------------------------------------
+            
+
+            # -----------------------------------------------------
+            # BUTTON-GRÖSSE
+            # -----------------------------------------------------
             btn.setSizePolicy(
                 QSizePolicy.Policy.Expanding,
-                QSizePolicy.Policy.Fixed
+                QSizePolicy.Policy.Fixed,
             )
+
             btn.setMinimumHeight(42)
             btn.setMaximumHeight(60)
-            btn.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
 
-            row, col = divmod(idx, cols_per_row)
-            options_grid.addWidget(btn, row, col)
+            # ---------------------------------------------------------
+            # EINZEILIGER BUTTON-TEXT
+            # Schrift wird bei langen Namen automatisch kleiner
+            # ---------------------------------------------------------
+            font = QFont("Segoe UI", 5, QFont.Weight.Bold)
+            btn.setFont(font)
 
-            self.option_buttons[key] = (btn, text_key)
+            # Etwas Platz für Icon + Rand berücksichtigen
+            fm = btn.fontMetrics()
+            text_width = fm.horizontalAdvance(raw_text)
 
+            # Bei langen Buttonnamen kleinere Schrift verwenden
+            if text_width > 150:
+                font.setPointSize(8)
+
+            if text_width > 175:
+                font.setPointSize(4)
+
+            btn.setFont(font)
+
+
+            # -----------------------------------------------------
+            # GRID
+            # -----------------------------------------------------
+            row, col = divmod(
+                idx,
+                cols_per_row,
+            )
+
+            options_grid.addWidget(
+                btn,
+                row,
+                col,
+            )
+
+            # Button speichern
+            self.option_buttons[key] = (
+                btn,
+                text_key,
+            )
+
+        # ---------------------------------------------------------
+        # ALLE 5 SPALTEN GLEICH BREIT
+        # ---------------------------------------------------------
         for i in range(cols_per_row):
             options_grid.setColumnStretch(i, 1)
 
+        # ---------------------------------------------------------
+        # CONTAINER
+        # ---------------------------------------------------------
         parent_layout.addWidget(container)
 
+
     def update_all_texts(self):
-        # Labels
-        self.lang_label.setText(TEXTS[self.LANG]["ui.language"])
-        self.color_label.setText(TEXTS[self.LANG]["color_label"])
-        self.commit_label.setText(TEXTS[self.LANG]["commit_count_label"])
-        self.info_button.setToolTip(TEXTS[self.LANG]["ui.info"])
+        # ---------------------------------------------------------
+        # LABELS
+        # ---------------------------------------------------------
+        self.lang_label.setText(
+            TEXTS[self.LANG]["ui.language"]
+        )
 
-        # Option Buttons
+        self.color_label.setText(
+            TEXTS[self.LANG]["color_label"]
+        )
+
+        self.commit_label.setText(
+            TEXTS[self.LANG]["commit_count_label"]
+        )
+
+        self.info_button.setToolTip(
+            TEXTS[self.LANG]["ui.info"]
+        )
+
+        # ---------------------------------------------------------
+        # OPTION BUTTONS
+        # ---------------------------------------------------------
         for btn, text_key in self.option_buttons.values():
-            if text_key in TEXTS[self.LANG]:
-                btn.setText(TEXTS[self.LANG][text_key])
 
-        # Grid Buttons (Patch Aktionen)
+            new_text = self.get_t(text_key, text_key)
+
+            btn.setText(new_text)
+            btn.setProperty("text_key", text_key)
+
+        # ---------------------------------------------------------
+        # GRID BUTTONS / PATCH AKTIONEN
+        # ---------------------------------------------------------
         for key, btn in getattr(self, "buttons", {}).items():
-            if key in TEXTS[self.LANG]:
-                btn.setText(TEXTS[self.LANG][key])
 
-        # Info Text
-        if hasattr(self, "info_text") and "info_text" in TEXTS[self.LANG]:
-            self.info_text.setPlainText(TEXTS[self.LANG]["info_text"])
+            new_text = self.get_t(key, key)
+
+            # Vollständigen Text setzen
+            btn.setText(new_text)
+
+            # Übersetzungsschlüssel speichern
+            btn.setProperty("text_key", key)
+
+            # Vollständigen Text zusätzlich speichern
+            btn.setProperty("full_text", new_text)
+
+        # ---------------------------------------------------------
+        # INFO TEXT
+        # ---------------------------------------------------------
+        if (
+            hasattr(self, "info_text")
+            and "info_text" in TEXTS[self.LANG]
+        ):
+            self.info_text.setPlainText(
+                TEXTS[self.LANG]["info_text"]
+            )
+
+
+
 
     # ---------------------
     @staticmethod
@@ -13419,13 +14359,18 @@ class PatchManagerGUI(QWidget):
         controls_group_layout.addLayout(grid_layout)
         main_layout.addWidget(controls_group)
 
-        # --- UNTERE SEKTION (Dein restlicher Code) ---
+        # --- UNTERE SEKTION (Korrigierte Reihenfolge) ---
         self.setup_option_buttons(main_layout)
+        
         self.grid_container = QWidget()
         self.layout_grid_buttons = QGridLayout(self.grid_container)
         self.layout_grid_buttons.setSpacing(10)
-        self.setup_grid_buttons()
+        
+        # SCHRITT 1: Container ZUERST in das Hauptlayout einbetten
         main_layout.addWidget(self.grid_container)
+        
+        # SCHRITT 2: JETZT ERST die Buttons im eingebetteten Container generieren
+        self.setup_grid_buttons()
 
         # ---------------------------------------------------------
         # TIMER & DIGITAL CLOCK
@@ -13862,51 +14807,106 @@ class PatchManagerGUI(QWidget):
 
     def repaint_ui_colors(self):
         """
-        Aktualisiert ALLE GUI-Elemente basierend auf dem gewählten Farbschema.
-        Inklusive Übergabe an die dynamische pbar_idle Animation.
+        Wendet das aktuell gewählte Farbschema auf die normalen GUI-Elemente an.
+
+        Individuelle Buttons wie:
+        - Grid-Buttons
+        - S3
+        - S4
+        - NCam
+
+        werden nicht überschrieben.
         """
-        from PyQt6.QtWidgets import QPushButton, QCheckBox, QProgressBar, QLabel
+        from PyQt6.QtWidgets import QPushButton, QCheckBox
 
         global current_diff_colors
 
-        # 1. Farben zentral definieren
+        # ============================================================
+        # 1. AKTUELLE THEME-FARBEN
+        # ============================================================
         text_color = current_diff_colors.get("fg", "#FFFFFF")
         bg_color = current_diff_colors.get("bg", "#2F2F2F")
         hover_color = current_diff_colors.get("hover", "#444444")
         active_color = current_diff_colors.get("active", "#666666")
 
-        # A) ALLE Buttons im Fenster automatisch finden und stylen
-        for btn in self.findChildren(QPushButton):
+        # ============================================================
+        # 2. INDIVIDUELLE BUTTONS SCHÜTZEN
+        # ============================================================
+        protected_buttons = {
+            "btn_s3",
+            "btn_s4",
+            "btn_ncam",
+        }
+
+        # Grid-Buttons ebenfalls schützen
+        grid_buttons = set()
+
+        if hasattr(self, "buttons") and isinstance(self.buttons, dict):
             try:
+                grid_buttons = {
+                    btn
+                    for btn in self.buttons.values()
+                    if btn is not None
+                }
+            except Exception:
+                grid_buttons = set()
+
+        # ============================================================
+        # 3. NORMALE BUTTONS
+        # ============================================================
+        for btn in self.findChildren(QPushButton):
+
+            try:
+                # S3 / S4 / NCam nicht anfassen
+                if btn.objectName() in protected_buttons:
+                    continue
+
+                # Grid-Buttons nicht anfassen
+                if btn in grid_buttons:
+                    continue
+
                 btn.setGraphicsEffect(None)
+
                 btn.setStyleSheet(
                     f"""
                     QPushButton {{
                         background-color: {bg_color};
                         color: {text_color};
                         border-radius: 10px;
-                        font-weight: 700; 
+                        font-weight: 700;
                         padding: 2px 6px;
-                        font-size: 13px;
-                        border: 1px solid #444;
-                        height: 35px;
+                        border: 1px solid {text_color};
                         min-height: 35px;
                     }}
+
                     QPushButton:hover {{
                         background-color: {hover_color};
+                        color: {text_color};
                         border: 1px solid {text_color};
                     }}
+
                     QPushButton:pressed {{
                         background-color: {active_color};
-                        padding-top: 2px;
+                        color: {text_color};
+                        border: 2px solid {text_color};
                     }}
-                """
+
+                    QPushButton:disabled {{
+                        background-color: {active_color};
+                        color: #777777;
+                        border: 1px solid #555555;
+                    }}
+                    """
                 )
+
             except RuntimeError:
                 continue
 
-        # B) STATS-CHECKBOX (TELEMETRIE)
+        # ============================================================
+        # 4. TELEMETRIE CHECKBOX
+        # ============================================================
         cb = getattr(self, "telemetry_cb", None)
+
         if cb:
             try:
                 cb.setStyleSheet(
@@ -13918,95 +14918,161 @@ class PatchManagerGUI(QWidget):
                         font-weight: 700;
                         padding: 2px 12px;
                         font-size: 13px;
-                        border: 1px solid #444;
+                        border: 1px solid {text_color};
                         min-height: 35px;
                     }}
+
                     QCheckBox:hover {{
                         background-color: {hover_color};
                         border: 1px solid {text_color};
                     }}
+
                     QCheckBox::indicator {{
                         width: 16px;
                         height: 16px;
                         border: 1px solid {text_color};
                         border-radius: 4px;
-                        background: #111;
+                        background-color: {bg_color};
                     }}
+
                     QCheckBox::indicator:checked {{
                         background-color: {text_color};
                         image: none;
                         border: 1.5px solid white;
                     }}
-                    QCheckBox::indicator:unchecked:hover {{ border: 1px solid white; }}
-                """
-                )
-            except:
-                pass
 
-        # C) PROGRESS BAR (Zustandssteuerung für Idle-Animation)
-        pb = getattr(self, "progress_bar", None)
-        if pb:
-            try:
-                if pb.value() == 0:
-                    # Falls Wert 0, stoppe altes Stylesheet und starte Pulsieren
-                    if hasattr(self, "pbar_idle"):
-                        self.pbar_idle()
-                else:
-                    # Falls Wert > 0 (z.B. 100 oder während Check), stoppe Animation
-                    if hasattr(self, "_idle_anim"):
-                        self._idle_anim.stop()
-
-                    # Festes Stylesheet für Fortschritt/Abschluss
-                    pb.setStyleSheet(
-                        f"""
-                        QProgressBar {{ 
-                            border: 1px solid {bg_color}; 
-                            border-radius: 7px; 
-                            background-color: #1a1a1a; 
-                            text-align: center; 
-                            color: {text_color}; 
-                            font-weight: 700; 
-                        }}
-                        QProgressBar::chunk {{ 
-                            background-color: {bg_color}; 
-                            border-radius: 6px; 
-                        }}
+                    QCheckBox::indicator:unchecked:hover {{
+                        border: 1px solid white;
+                    }}
                     """
-                    )
+                )
+
             except RuntimeError:
                 pass
 
-        # D) Labels & Header
+        # ============================================================
+        # 5. PROGRESS BAR
+        # ============================================================
+        pb = getattr(self, "progress_bar", None)
+
+        if pb:
+            try:
+                if pb.value() == 0:
+
+                    if hasattr(self, "pbar_idle"):
+                        self.pbar_idle()
+
+                else:
+
+                    if hasattr(self, "_idle_anim"):
+                        self._idle_anim.stop()
+
+                    pb.setStyleSheet(
+                        f"""
+                        QProgressBar {{
+                            border: 1px solid {text_color};
+                            border-radius: 7px;
+                            background-color: {bg_color};
+                            text-align: center;
+                            color: {text_color};
+                            font-weight: 700;
+                        }}
+
+                        QProgressBar::chunk {{
+                            background-color: {active_color};
+                           border-radius: 6px;
+                        }}
+                        """
+                    )
+
+            except RuntimeError:
+                pass
+
+        # ============================================================
+        # 6. LABELS & HEADER
+        # ============================================================
         labels = [
             "lang_label",
             "color_label",
             "commit_label",
             "controls_header",
             "github_header",
+            "header_label",
+            "status_label",
         ]
-        for lbl_name in labels:
-            lbl = getattr(self, lbl_name, None)
-            if lbl:
-                try:
-                    bg = bg_color if "header" in lbl_name else "transparent"
-                    lbl.setStyleSheet(
-                        f"color: {text_color}; font-weight: 700; font-size: 18px; background: {bg}; border-radius: 6px;"
-                    )
-                except RuntimeError:
-                    pass
 
-        # E) Hauptfenster Hintergrund & Finalisierung
+        for lbl_name in labels:
+
+            lbl = getattr(self, lbl_name, None)
+
+            if not lbl:
+                continue
+
+            try:
+                is_header = "header" in lbl_name
+
+                label_bg = bg_color if is_header else "transparent"
+
+                lbl.setStyleSheet(
+                    f"""
+                    QLabel {{
+                        color: {text_color};
+                        font-weight: 700;
+                        font-size: 18px;
+                        background-color: {label_bg};
+                        border: none;
+                    }}
+                    """
+                )
+
+            except RuntimeError:
+                pass
+
+        # ============================================================
+        # 7. HAUPTFENSTER + CENTRAL WIDGET HINTERGRUND
+        # ============================================================
         try:
-            self.setStyleSheet("background-color: #2F2F2F;")
-            # Falls kein Fortschritt da ist, Animation sicherstellen
+            # QMainWindow selbst
+            self.setAutoFillBackground(True)
+
+            palette = self.palette()
+            palette.setColor(
+                self.backgroundRole(),
+                QColor(bg_color)
+            )
+            self.setPalette(palette)
+
+            # Central Widget ebenfalls einfärben
+            central = self.centralWidget()
+
+            if central:
+                central.setAutoFillBackground(True)
+
+                central_palette = central.palette()
+                central_palette.setColor(
+                    central.backgroundRole(),
+                    QColor(bg_color)
+                )
+                central.setPalette(central_palette)
+
+        except RuntimeError:
+            pass
+
+
+        # ============================================================
+        # 8. PROGRESSBAR IDLE NACH THEME-ÄNDERUNG
+        # ============================================================
+        try:
             if pb and pb.value() == 0 and hasattr(self, "pbar_idle"):
                 self.pbar_idle()
         except RuntimeError:
             pass
 
+
     def setup_grid_buttons(self):
         """
         Erstellt Aktions-Buttons mit Tooltip-Support und einheitlichem Styling.
+        Sichert den vollständigen Text von 'clean_folder' ab und verhindert Grid-Stauchungen.
         """
         from PyQt6.QtWidgets import (
             QGridLayout,
@@ -14043,9 +15109,7 @@ class PatchManagerGUI(QWidget):
         }
 
         # ---------- Aktionen & TOOLTIPS ----------
-        # Format: (Key, Funktion, Tooltip-DE, Tooltip-EN)
         grid_actions = [
-
             (
                 "patch_create",
                 lambda: create_patch(self, self.info_text, self.progress_bar.setValue),
@@ -14123,58 +15187,94 @@ class PatchManagerGUI(QWidget):
         grid_layout.setContentsMargins(0, 5, 0, 5)
 
         self.buttons = {}
-        cols, FIXED_HEIGHT, btn_color = 3, 35, "#1E90FF"
+        cols, FIXED_HEIGHT, btn_color = 3, 46, "#1E90FF"
 
         # ---------- Buttons erzeugen ----------
         for idx, (key, func, tt_de, tt_en) in enumerate(grid_actions):
+
+            button_text = self.get_t(key, key)
+
+            # Fallback Korrektur falls die Datenbank fehlerhaft ein unvollständiges Wort liefert
+            if key == "clean_folder":
+                if button_text == "clean_folder" or button_text.strip() == "Patch-Ordner":
+                    button_text = "Patch-Ordner leeren" if is_de else "Clear Patch Folder"
+
+            print(f"[GRID] {key} -> {button_text!r}")
+
             btn = self.create_action_button(
                 parent=self,
-                text=self.get_t(key, key),
+                text=button_text,
                 color=btn_color,
                 fg="white",
-                callback=lambda checked=False, f=func, k=key: (
-                    self.set_active_button(k),
-                    f(),
-                ),
+                callback=lambda checked=False, f=func, k=key: self._run_grid_action(k, f),
                 all_buttons_list=self.all_buttons,
-                min_height=FIXED_HEIGHT,
+                min_height=46,
                 radius=self.BUTTON_RADIUS,
             )
 
-            # Icon setzen
-            theme_name, fallback = ICON_MAP.get(
-                key, ("application-x-executable", QStyle.StandardPixmap.SP_FileIcon)
+            # Text IMMER als Property speichern
+            btn.setProperty("text_key", key)
+            btn.setText(button_text)
+
+            # Einzeilig & Flexibel einstellen
+            btn.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Fixed
             )
+
+            btn.setMinimumWidth(180)
+            btn.setMinimumHeight(46)
+            btn.setMaximumHeight(46)
+
+            # Icon zuweisen
+            theme_name, fallback = ICON_MAP.get(
+                key,
+                ("application-x-executable", QStyle.StandardPixmap.SP_FileIcon)
+            )
+
             btn.setIcon(get_system_icon(theme_name, fallback))
             btn.setIconSize(QSize(20, 20))
 
-            # Tooltip setzen
+            # Tooltip
             btn.setToolTip(tt_de if is_de else tt_en)
 
-            # STYLING (Button + Tooltip)
+            # Styling - Nutzt "white-space: nowrap;", um den Zeilenumbruch im CSS zu unterbinden!
             btn.setStyleSheet(
                 btn.styleSheet()
                 + f"""
-                padding-left: 12px; text-align: left; white-space: nowrap;
-                QToolTip {{
-                    background-color: #3d3d3d; color: {btn_color}; 
-                    border: 1px solid {btn_color}; border-radius: 4px;
-                    padding: 5px; font-size: 10pt; font-weight: bold;
+                QPushButton {{
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    text-align: center;
+                    white-space: nowrap;
                 }}
-            """
-            )
 
-            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            btn.setMinimumWidth(170)
-            btn.setMaximumHeight(FIXED_HEIGHT)
+                QToolTip {{
+                    background-color: #3d3d3d;
+                    color: {btn_color};
+                    border: 1px solid {btn_color};
+                    border-radius: 4px;
+                    padding: 5px;
+                    font-size: 10pt;
+                    font-weight: bold;
+                }}
+                """
+            )
 
             row, col = divmod(idx, cols)
             grid_layout.addWidget(btn, row, col)
+
             self.buttons[key] = btn
 
+            print(f"BUTTON TEXT: {key} -> {btn.text()!r}")
+            
         for i in range(cols):
             grid_layout.setColumnStretch(i, 1)
+            
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(100, self._fit_all_button_texts)
 
+    
     def update_language(self):
         """
         Übersetzt alle Buttons, Labels und Header zentral.
@@ -14298,12 +15398,7 @@ class PatchManagerGUI(QWidget):
         )
         safe_ui("clean_emu_button", "setText", get_t("clean_emu_button", "Bereinigen"))
 
-        # --- F) FINISH ---
-        if hasattr(self, "repaint_ui_colors"):
-            try:
-                self.repaint_ui_colors()
-            except RuntimeError:
-                pass
+        
 
         QApplication.processEvents()
 
@@ -14412,7 +15507,10 @@ class PatchManagerGUI(QWidget):
 
         if hasattr(self, "update_language"):
             self.update_language()
-
+        # ============================================================
+        # THEME/FARBSCHEMA NACH SPRACHWECHSEL ERNEUT ANWENDEN
+        # ============================================================
+        
         # Buttons aktualisieren
         for btn_attr, default_label in [("btn_s3", "S3"), ("btn_s4", "S4"), ("btn_ncam", "NCam")]:
             btn = getattr(self, btn_attr, None)
@@ -14463,6 +15561,7 @@ class PatchManagerGUI(QWidget):
                 color = "#2ecc71" if btn_attr == "btn_s4" else "orange"
 
             btn.setText(f"🚀 {label}")
+            btn._original_text = f"🚀 {label}"
             btn.setStyleSheet(
                 f"""
                 QPushButton {{
@@ -14479,6 +15578,48 @@ class PatchManagerGUI(QWidget):
                     color:black;
                 }}
                 """
+            )
+                # ============================================================
+        # BUTTON-TEXTE NACH SPRACHWECHSEL ERNEUT ANPASSEN
+        #
+        # Wichtig:
+        # Die Texte von S3/S4/NCam wurden gerade mit setText()
+        # geändert. Erst danach kann der tatsächliche Platzbedarf
+        # zuverlässig berechnet werden.
+        # ============================================================
+        try:
+            if hasattr(self, "_fit_all_button_texts"):
+
+                # Layout zuerst aktualisieren
+                self.layout().activate()
+
+                # Direkt nach setText()
+                QTimer.singleShot(
+                    0,
+                    self._fit_all_button_texts
+                )
+
+                # Nach Neuberechnung des Layouts
+                QTimer.singleShot(
+                    100,
+                    self._fit_all_button_texts
+                )
+
+                # Sicherheitsdurchlauf
+                QTimer.singleShot(
+                    300,
+                    self._fit_all_button_texts
+                )
+
+                # Nach vollständigem Sprachwechsel
+                QTimer.singleShot(
+                    600,
+                    self._fit_all_button_texts
+                )
+
+        except Exception as e:
+            print(
+                f"[change_language] Button-Text-Anpassung fehlgeschlagen: {e}"
             )
 
         # ---------------- Flaggen Animation + Systemcheck ----------------
@@ -14556,6 +15697,31 @@ class PatchManagerGUI(QWidget):
             if hasattr(self, "btn_patch_online"):
                 self.btn_patch_online.setText(
                     f"🌐 {strip_icons(lang_dict.get('patch_online_download','Patch Online' if is_de else 'Load Patch'))}"
+                )
+                        # ============================================================
+            # ALLE BUTTON-TEXTE NACH SPRACHWECHSEL FINAL ANPASSEN
+            # ============================================================
+            try:
+                if hasattr(self, "_fit_all_button_texts"):
+                    QTimer.singleShot(
+                        0,
+                        self._fit_all_button_texts
+                    )
+                    QTimer.singleShot(
+                        150,
+                        self._fit_all_button_texts
+                    )
+                    QTimer.singleShot(
+                        400,
+                        self._fit_all_button_texts
+                    )
+                    QTimer.singleShot(
+                        800,
+                        self._fit_all_button_texts
+                    )
+            except Exception as e:
+                print(
+                    f"[change_language] Finaler Button-Fit fehlgeschlagen: {e}"
                 )
 
             # Final Label vorbereiten & verstecken
@@ -14635,19 +15801,27 @@ class PatchManagerGUI(QWidget):
                     QTimer.singleShot(5000, lambda: pbar.setFormat("%p%"))
 
                 # Overlay ausblenden
-                if hasattr(self, "hide_language_overlay"):
-                    self.hide_language_overlay()
+                try:
+                    if hasattr(self, "hide_language_overlay"):
+                        self.hide_language_overlay()
+                except Exception:
+                    pass
 
+                # ============================================================
+                # SPRACHWECHSEL WIEDER FREIGEBEN
+                # ============================================================
+                self._block_language_change = False
             QTimer.singleShot(500, final_blink)
 
         # ---------------- Animation starten ----------------
         if hasattr(self, "show_language_animation"):
-            self.show_language_animation(self.LANG, callback=after_animation)
+            self.show_language_animation(
+                self.LANG,
+                callback=after_animation
+            )
         else:
             after_animation()
 
-        # ---------------- Cleanup ----------------
-        self._block_language_change = False
         QApplication.processEvents()
 
     # =====================
@@ -14998,11 +16172,13 @@ class PatchManagerGUI(QWidget):
             if info_widget is None:
                 return
 
-        lang = getattr(self, "LANG", "de").lower()
-        is_de = lang.startswith("de")
-        pbar = getattr(self, "progress_bar", None)
-        num_commits = num_commits or getattr(self, "commit_spin", None)
-        num_commits = num_commits.value() if hasattr(num_commits, "value") else 10
+            lang = getattr(self, "LANG", "de").lower()
+            is_de = lang.startswith("de")
+            pbar = getattr(self, "progress_bar", None)
+        
+            # --- FEHLERBEHEBUNG: Widget-Referenz sauber trennen ---
+            commit_widget = num_commits or getattr(self, "commit_spin", None)
+            total_commits = commit_widget.value() if hasattr(commit_widget, "value") else 10
 
         def log(text, level="info"):
             if info_widget:
