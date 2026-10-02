@@ -1735,6 +1735,20 @@ TEXTS = {
         "zip_success": "✅ Patch successfully zipped: {zip_file}",
         "zip_failed": "❌ Error while zipping: {error}",
         # OSCam-Emu Git Patch
+        "patch_emu_git_start": "🚀 Starting OSCam-Emu Git patch process...",
+        "patch_emu_git_check_git": "🔎 Checking Git...",
+        "patch_emu_git_prepare": "🧹 Preparing workspace...",
+        "patch_emu_git_clone": "🌐 Cloning Streamboard...",
+        "patch_emu_git_head": "📌 Determining current Streamboard revision...",
+        "patch_emu_git_check_patch": "🔍 Checking patch...",
+        "patch_emu_git_apply": "🔧 Applying OSCam-Emu patch...",
+        "patch_emu_git_status": "📋 Checking changes...",
+        "patch_emu_git_config": "👤 Configuring Git...",
+        "patch_emu_git_commit": "💾 Committing patch...",
+        "patch_emu_git_replace": "📦 Installing patched repository...",
+        "patch_emu_git_validate": "🔎 Validating repository...",
+        "patch_emu_git_success": "✅ OSCam-Emu Git patched successfully",
+        "patch_emu_git_failed": "❌ OSCam-Emu Git patching failed",
         "patch_emu_git_done": "🎉 OScam-Emu Git successfully patched!",
         "patch_emu_git_start": "🚀 Starting OScam-Emu patch process...",
         "patch_emu_git_clone_failed": "❌ Error: Clone failed!",
@@ -2076,6 +2090,20 @@ TEXTS = {
         "patch_emu_git_done": "✅ Oscam Emu Git erfolgreich gepatcht",
         "edit_patch_header": "Edit Patch Header",
         "patch_emu_git_revision": "\U0001f4dd Git-Revision: {sha}",
+        "patch_emu_git_start": "🚀 OSCam-Emu-Git Patch-Prozess wird gestartet...",
+        "patch_emu_git_check_git": "🔎 Git wird geprüft...",
+        "patch_emu_git_prepare": "🧹 Arbeitsumgebung wird vorbereitet...",
+        "patch_emu_git_clone": "🌐 Streamboard wird geklont...",
+        "patch_emu_git_head": "📌 Aktuellen Streamboard-Stand ermitteln...",
+        "patch_emu_git_check_patch": "🔍 Patch wird geprüft...",
+        "patch_emu_git_apply": "🔧 OSCam-Emu-Patch wird angewendet...",
+        "patch_emu_git_status": "📋 Änderungen werden ermittelt...",
+        "patch_emu_git_config": "👤 Git wird konfiguriert...",
+        "patch_emu_git_commit": "💾 Patch wird committed...",
+        "patch_emu_git_replace": "📦 Fertiges Repository wird übernommen...",
+        "patch_emu_git_validate": "🔎 Repository wird geprüft...",
+        "patch_emu_git_success": "✅ OSCam-Emu-Git erfolgreich gepatcht",
+        "patch_emu_git_failed": "❌ OSCam-Emu-Git konnte nicht gepatcht werden",
         # Active autor repo
         "config_active_header": "🛠️ <b>Active Configuration:</b>",
         "current_author": "👤 Patch Author:",
@@ -9631,28 +9659,18 @@ def patch_oscam_emu_git(
     progress_callback=None
 ):
     """
-    Klont das aktuelle Streamboard-OSCam in ein temporäres
-    Arbeitsverzeichnis, wendet oscam-emu.patch an und
-    übernimmt anschließend das fertige Git-Repository nach:
+    Klont das aktuelle Streamboard-OSCam, wendet den
+    oscam-emu.patch an und übernimmt das fertige Git-
+    Repository nach PATCH_EMU_GIT_DIR.
 
-        PATCH_EMU_GIT_DIR
+    Die Fortschrittsanzeige läuft von 0 bis 100 %.
 
-    Dieser Ordner ist anschließend exakt der Ordner,
-    den github_upload_oscam_emu_folder() hochlädt.
+    Bei erfolgreichem Abschluss wird in der Progressbar
+    ausschließlich der TEXTS-Eintrag
 
-    Ablauf:
+        patch_emu_git_success
 
-        Streamboard Git
-              ↓
-        temporäres Git-Repository
-              ↓
-        oscam-emu.patch
-              ↓
-        Git Commit
-              ↓
-        PATCH_EMU_GIT_DIR
-              ↓
-        github_upload_oscam_emu_folder()
+    angezeigt.
     """
 
     from PyQt6.QtWidgets import QTextEdit, QApplication
@@ -9667,22 +9685,18 @@ def patch_oscam_emu_git(
     # GUI
     # ============================================================
 
-    if gui_instance and hasattr(
-        gui_instance,
-        "hide_final_label"
-    ):
-        gui_instance.hide_final_label()
-
     gui = gui_instance
+
+    if gui and hasattr(gui, "hide_final_label"):
+        try:
+            gui.hide_final_label()
+        except Exception:
+            pass
 
     widget = (
         info_widget
         if isinstance(info_widget, QTextEdit)
-        else getattr(
-            gui,
-            "info_text",
-            None
-        )
+        else getattr(gui, "info_text", None)
     )
 
     pbar = getattr(
@@ -9691,18 +9705,69 @@ def patch_oscam_emu_git(
         None
     )
 
-    lang = str(
-        getattr(
-            gui,
-            "LANG",
-            "de"
-        )
-    ).lower()[:2]
+    # ============================================================
+    # SPRACHE
+    # ============================================================
 
-    is_de = lang == "de"
+    lang = "de"
+
+    try:
+        lang = str(
+            getattr(
+                gui,
+                "LANG",
+                "de"
+            )
+        ).lower().strip()[:2]
+    except Exception:
+        lang = "de"
+
+    if lang not in ("de", "en"):
+        lang = "de"
 
     # ============================================================
-    # PROGRESSBAR
+    # TEXTS
+    # ============================================================
+
+    def tr(key, fallback_de, fallback_en=None):
+        """
+        Liest Texte aus TEXTS.
+
+        Beispiel:
+            TEXTS["de"]["patch_emu_git_success"]
+        """
+
+        if fallback_en is None:
+            fallback_en = fallback_de
+
+        try:
+            language_dict = TEXTS.get(
+                lang,
+                {}
+            )
+
+            if isinstance(
+                language_dict,
+                dict
+            ):
+                value = language_dict.get(
+                    key
+                )
+
+                if value:
+                    return str(value)
+
+        except Exception:
+            pass
+
+        return (
+            fallback_en
+            if lang == "en"
+            else fallback_de
+        )
+
+    # ============================================================
+    # PROGRESSBAR STYLE
     # ============================================================
 
     STYLE_BASE = """
@@ -9733,61 +9798,112 @@ def patch_oscam_emu_git(
         "stop:1 #39FF14)"
     )
 
-    def update_p(
+    ERROR_GRADIENT = (
+        "qlineargradient("
+        "spread:pad, "
+        "x1:0, y1:0, "
+        "x2:1, y2:0, "
+        "stop:0 #800000, "
+        "stop:1 #FF0000)"
+    )
+
+    # ============================================================
+    # PROGRESS SETZEN
+    # ============================================================
+
+    def update_progress(
         value,
         text=None,
-        is_err=False
+        error=False
     ):
+        """
+        Aktualisiert ausschließlich die Progressbar.
 
-        if pbar:
+        Wichtig:
+        Bei 100 % wird der übergebene Text als Abschlussmeldung
+        angezeigt und nicht wieder überschrieben.
+        """
 
-            if is_err:
+        try:
+            value = int(value)
+        except Exception:
+            value = 0
 
-                chunk = (
-                    "qlineargradient("
-                    "spread:pad, "
-                    "x1:0, y1:0, "
-                    "x2:1, y2:0, "
-                    "stop:0 #800, "
-                    "stop:1 #F00)"
+        value = max(
+            0,
+            min(
+                100,
+                value
+            )
+        )
+
+        if pbar is not None:
+
+            try:
+
+                if error:
+
+                    pbar.setStyleSheet(
+                        STYLE_BASE.format(
+                            text_color="#FF0000",
+                            chunk_color=ERROR_GRADIENT
+                        )
+                    )
+
+                else:
+
+                    pbar.setStyleSheet(
+                        STYLE_BASE.format(
+                            text_color="black",
+                            chunk_color=RAINBOW_GRADIENT
+                        )
+                    )
+
+                pbar.setValue(
+                    value
                 )
 
-                text_color = "#FF0000"
+                if text:
+                    pbar.setFormat(
+                        str(text)
+                    )
+                else:
+                    pbar.setFormat(
+                        f"{value}%"
+                    )
 
-            else:
+                pbar.show()
 
-                chunk = RAINBOW_GRADIENT
-                text_color = "black"
+            except Exception as progress_error:
 
-            pbar.setStyleSheet(
-                STYLE_BASE.format(
-                    text_color=text_color,
-                    chunk_color=chunk
+                print(
+                    "ProgressBar-Fehler:",
+                    progress_error,
+                    flush=True
                 )
-            )
 
-            pbar.setValue(
-                int(value)
-            )
+        # --------------------------------------------------------
+        # Externer Callback
+        # --------------------------------------------------------
 
-            pbar.setFormat(
-                text
-                if text
-                else f"{value}%"
-            )
-
-            pbar.show()
-
-        if progress_callback:
+        if progress_callback is not None:
 
             try:
                 progress_callback(
-                    int(value)
+                    value
                 )
-            except Exception:
-                pass
+            except Exception as callback_error:
 
-        QApplication.processEvents()
+                print(
+                    "Progress-Callback-Fehler:",
+                    callback_error,
+                    flush=True
+                )
+
+        try:
+            QApplication.processEvents()
+        except Exception:
+            pass
 
     # ============================================================
     # LOG
@@ -9797,6 +9913,10 @@ def patch_oscam_emu_git(
         text,
         level="info"
     ):
+
+        text = str(
+            text
+        )
 
         if gui and hasattr(
             gui,
@@ -9828,13 +9948,26 @@ def patch_oscam_emu_git(
                 "gray"
             )
 
-            widget.append(
-                f'<span style="color:{color}">'
-                f'{text}'
-                f'</span>'
-            )
+            try:
 
-        QApplication.processEvents()
+                widget.append(
+                    f'<span style="color:{color}">'
+                    f'{text}'
+                    f'</span>'
+                )
+
+            except Exception:
+                pass
+
+        print(
+            text,
+            flush=True
+        )
+
+        try:
+            QApplication.processEvents()
+        except Exception:
+            pass
 
     # ============================================================
     # SOUND
@@ -9844,14 +9977,21 @@ def patch_oscam_emu_git(
         success=True
     ):
 
-        if "safe_play" in globals():
+        safe_play = globals().get(
+            "safe_play"
+        )
+
+        if callable(
+            safe_play
+        ):
 
             try:
 
-                globals()["safe_play"](
+                safe_play(
                     "complete.oga"
                     if success
-                    else "dialog-error.oga"
+                    else
+                    "dialog-error.oga"
                 )
 
             except Exception:
@@ -9872,7 +10012,9 @@ def patch_oscam_emu_git(
             "git_command"
         )
 
-        if callable(git_func):
+        if callable(
+            git_func
+        ):
 
             return git_func(
                 args,
@@ -9885,7 +10027,9 @@ def patch_oscam_emu_git(
             "_git_command"
         )
 
-        if callable(git_func):
+        if callable(
+            git_func
+        ):
 
             return git_func(
                 args,
@@ -9926,6 +10070,10 @@ def patch_oscam_emu_git(
 
         return result
 
+    # ============================================================
+    # GIT OUTPUT
+    # ============================================================
+
     def git_output(
         args,
         cwd
@@ -9946,7 +10094,7 @@ def patch_oscam_emu_git(
         ).strip()
 
     # ============================================================
-    # WINDOWS-SICHERES LÖSCHEN
+    # WINDOWS SICHERES LÖSCHEN
     # ============================================================
 
     def remove_readonly(
@@ -9956,25 +10104,21 @@ def patch_oscam_emu_git(
     ):
 
         try:
-
             os.chmod(
                 path,
                 stat.S_IWRITE
+                | stat.S_IREAD
             )
-
         except Exception:
             pass
 
-        try:
+        func(
+            path
+        )
 
-            func(
-                path
-            )
-
-        except Exception:
-
-            # Letzten Fehler weitergeben
-            raise
+    # ============================================================
+    # VERZEICHNIS LÖSCHEN
+    # ============================================================
 
     def safe_remove_directory(
         directory,
@@ -9990,14 +10134,10 @@ def patch_oscam_emu_git(
             directory
         )
 
-        log(
-            f"🧹 Entferne temporäres Verzeichnis:\n"
-            f"{directory}",
-            "info"
-        )
+        last_error = None
 
         # --------------------------------------------------------
-        # Read-only Attribute entfernen
+        # Schreibschutz entfernen
         # --------------------------------------------------------
 
         try:
@@ -10056,8 +10196,6 @@ def patch_oscam_emu_git(
         # Mehrfach versuchen
         # --------------------------------------------------------
 
-        last_error = None
-
         for attempt in range(
             1,
             retries + 1
@@ -10087,7 +10225,10 @@ def patch_oscam_emu_git(
                         "warning"
                     )
 
-                    QApplication.processEvents()
+                    try:
+                        QApplication.processEvents()
+                    except Exception:
+                        pass
 
                     time.sleep(
                         0.5
@@ -10108,11 +10249,37 @@ def patch_oscam_emu_git(
 
     try:
 
-        update_p(
-            5,
-            "🚀 Starte OScam-Emu Patch-Prozess..."
-            if is_de
-            else "🚀 Starting OScam-Emu patch process..."
+        # ========================================================
+        # 0 %
+        # ========================================================
+
+        update_progress(
+            0,
+            tr(
+                "patch_emu_git_start",
+                "🚀 OSCam-Emu-Git Patch-Prozess wird gestartet...",
+                "🚀 Starting OSCam-Emu Git patch process..."
+            )
+        )
+
+        log(
+            ""
+        )
+
+        log(
+            "════════════════════════════════════════════"
+        )
+
+        log(
+            "       OSCAM-EMU-GIT PATCHEN"
+        )
+
+        log(
+            "════════════════════════════════════════════"
+        )
+
+        log(
+            ""
         )
 
         # ========================================================
@@ -10156,10 +10323,6 @@ def patch_oscam_emu_git(
             patch_dir
         )
 
-        # ========================================================
-        # TEMPORÄRES VERZEICHNIS
-        # ========================================================
-
         temp_dir = os.path.join(
             plugin_dir,
             ".oscam_emu_patch_work"
@@ -10170,18 +10333,15 @@ def patch_oscam_emu_git(
         # ========================================================
 
         log(
-            f"📂 Zielordner: {patch_dir}",
-            "info"
+            f"📂 Zielordner: {patch_dir}"
         )
 
         log(
-            f"🌐 Streamboard: {stream_url}",
-            "info"
+            f"🌐 Streamboard: {stream_url}"
         )
 
         log(
-            f"📄 Patch: {patch_file}",
-            "info"
+            f"📄 Patch: {patch_file}"
         )
 
         # ========================================================
@@ -10201,9 +10361,13 @@ def patch_oscam_emu_git(
         # GIT PRÜFEN
         # ========================================================
 
-        update_p(
+        update_progress(
             10,
-            "🔎 Git wird geprüft..."
+            tr(
+                "patch_emu_git_check_git",
+                "🔎 Git wird geprüft...",
+                "🔎 Checking Git..."
+            )
         )
 
         run_git(
@@ -10214,12 +10378,16 @@ def patch_oscam_emu_git(
         )
 
         # ========================================================
-        # ALTES TEMPORÄRES VERZEICHNIS
+        # ARBEITSUMGEBUNG
         # ========================================================
 
-        update_p(
+        update_progress(
             15,
-            "🧹 Arbeitsumgebung wird vorbereitet..."
+            tr(
+                "patch_emu_git_prepare",
+                "🧹 Arbeitsumgebung wird vorbereitet...",
+                "🧹 Preparing workspace..."
+            )
         )
 
         if os.path.exists(
@@ -10239,14 +10407,17 @@ def patch_oscam_emu_git(
         # STREAMBOARD KLONEN
         # ========================================================
 
-        update_p(
+        update_progress(
             25,
-            "🌐 Streamboard wird geklont..."
+            tr(
+                "patch_emu_git_clone",
+                "🌐 Streamboard wird geklont...",
+                "🌐 Cloning Streamboard..."
+            )
         )
 
         log(
-            "🌐 Klone aktuelles Streamboard-Repository...",
-            "info"
+            "🌐 Klone aktuelles Streamboard-Repository..."
         )
 
         try:
@@ -10259,7 +10430,8 @@ def patch_oscam_emu_git(
                     stream_url,
                     "."
                 ],
-                cwd=temp_dir
+                cwd=temp_dir,
+                timeout=1200
             )
 
         except Exception as exc:
@@ -10281,9 +10453,13 @@ def patch_oscam_emu_git(
         # STREAMBOARD HEAD
         # ========================================================
 
-        update_p(
+        update_progress(
             35,
-            "📌 Aktuellen Streamboard-Stand ermitteln..."
+            tr(
+                "patch_emu_git_head",
+                "📌 Aktuellen Streamboard-Stand ermitteln...",
+                "📌 Determining current Streamboard revision..."
+            )
         )
 
         stream_head = git_output(
@@ -10310,9 +10486,13 @@ def patch_oscam_emu_git(
         # PATCH PRÜFEN
         # ========================================================
 
-        update_p(
+        update_progress(
             45,
-            "🔍 Patch wird geprüft..."
+            tr(
+                "patch_emu_git_check_patch",
+                "🔍 Patch wird geprüft...",
+                "🔍 Checking patch..."
+            )
         )
 
         try:
@@ -10348,9 +10528,13 @@ def patch_oscam_emu_git(
         # PATCH ANWENDEN
         # ========================================================
 
-        update_p(
+        update_progress(
             58,
-            "🔧 OSCam-Emu Patch wird angewendet..."
+            tr(
+                "patch_emu_git_apply",
+                "🔧 OSCam-Emu-Patch wird angewendet...",
+                "🔧 Applying OSCam-Emu patch..."
+            )
         )
 
         try:
@@ -10382,9 +10566,13 @@ def patch_oscam_emu_git(
         # STATUS
         # ========================================================
 
-        update_p(
+        update_progress(
             68,
-            "📋 Änderungen werden ermittelt..."
+            tr(
+                "patch_emu_git_status",
+                "📋 Änderungen werden ermittelt...",
+                "📋 Checking changes..."
+            )
         )
 
         status = git_output(
@@ -10398,15 +10586,13 @@ def patch_oscam_emu_git(
         if status:
 
             log(
-                "Geänderte Dateien:",
-                "info"
+                "Geänderte Dateien:"
             )
 
             for line in status.splitlines():
 
                 log(
-                    f"  {line}",
-                    "info"
+                    f"  {line}"
                 )
 
         else:
@@ -10420,9 +10606,13 @@ def patch_oscam_emu_git(
         # GIT CONFIG
         # ========================================================
 
-        update_p(
+        update_progress(
             75,
-            "👤 Git wird konfiguriert..."
+            tr(
+                "patch_emu_git_config",
+                "👤 Git wird konfiguriert...",
+                "👤 Configuring Git..."
+            )
         )
 
         cfg_func = globals().get(
@@ -10440,7 +10630,6 @@ def patch_oscam_emu_git(
                 cfg = cfg_func() or {}
 
             except Exception:
-
                 cfg = {}
 
         user_name = (
@@ -10479,9 +10668,13 @@ def patch_oscam_emu_git(
         # COMMIT
         # ========================================================
 
-        update_p(
+        update_progress(
             82,
-            "💾 Patch wird committed..."
+            tr(
+                "patch_emu_git_commit",
+                "💾 Patch wird committed...",
+                "💾 Committing patch..."
+            )
         )
 
         run_git(
@@ -10517,7 +10710,6 @@ def patch_oscam_emu_git(
                     )
 
                     if first_line:
-
                         commit_message = first_line
 
             except Exception:
@@ -10532,10 +10724,6 @@ def patch_oscam_emu_git(
             ],
             cwd=temp_dir
         )
-
-        # ========================================================
-        # REVISION
-        # ========================================================
 
         revision = git_output(
             [
@@ -10552,20 +10740,17 @@ def patch_oscam_emu_git(
         )
 
         # ========================================================
-        # ALTES ZIEL SICHERN
+        # FERTIGES REPOSITORY ÜBERNEHMEN
         # ========================================================
 
-        update_p(
+        update_progress(
             88,
-            "📦 Fertiges Repository wird übernommen..."
+            tr(
+                "patch_emu_git_replace",
+                "📦 Fertiges Repository wird übernommen...",
+                "📦 Installing patched repository..."
+            )
         )
-
-        # --------------------------------------------------------
-        # Wenn alter Zielordner existiert:
-        # nicht sofort löschen.
-        #
-        # Erst umbenennen.
-        # --------------------------------------------------------
 
         if os.path.exists(
             patch_dir
@@ -10585,8 +10770,7 @@ def patch_oscam_emu_git(
                 )
 
             log(
-                "📦 Altes Repository wird gesichert...",
-                "info"
+                "📦 Altes Repository wird gesichert..."
             )
 
             try:
@@ -10607,7 +10791,7 @@ def patch_oscam_emu_git(
                 ) from exc
 
         # ========================================================
-        # TEMP → ZIEL
+        # TEMP -> ZIEL
         # ========================================================
 
         try:
@@ -10619,12 +10803,7 @@ def patch_oscam_emu_git(
 
             temp_dir = None
 
-        except Exception as exc:
-
-            # ----------------------------------------------------
-            # Fallback:
-            # shutil.move
-            # ----------------------------------------------------
+        except Exception:
 
             log(
                 "⚠️ Direkte Übernahme nicht möglich – "
@@ -10675,9 +10854,6 @@ def patch_oscam_emu_git(
 
             except Exception as exc:
 
-                # Das ist kein fataler Fehler.
-                #
-                # Das neue Repository existiert bereits.
                 log(
                     "⚠️ Altes Repository konnte noch "
                     "nicht entfernt werden:\n"
@@ -10689,9 +10865,13 @@ def patch_oscam_emu_git(
         # ZIEL VALIDIEREN
         # ========================================================
 
-        update_p(
+        update_progress(
             94,
-            "🔎 Repository wird geprüft..."
+            tr(
+                "patch_emu_git_validate",
+                "🔎 Repository wird geprüft...",
+                "🔎 Validating repository..."
+            )
         )
 
         if not os.path.isdir(
@@ -10724,9 +10904,15 @@ def patch_oscam_emu_git(
             cwd=patch_dir
         )
 
+        if not final_head:
+
+            raise RuntimeError(
+                "Finaler Repository-HEAD konnte "
+                "nicht ermittelt werden."
+            )
+
         log(
-            f"✓ Fertiges Repository HEAD: "
-            f"{final_head}",
+            f"✓ Fertiges Repository HEAD: {final_head}",
             "success"
         )
 
@@ -10737,21 +10923,34 @@ def patch_oscam_emu_git(
         if gui:
 
             try:
-
-                gui.patch_repo_dir = (
-                    patch_dir
-                )
-
+                gui.patch_repo_dir = patch_dir
             except Exception:
                 pass
 
         # ========================================================
-        # FERTIG
+        # ERFOLG
         # ========================================================
 
-        update_p(
+        success_text = tr(
+            "patch_emu_git_success",
+            "✅ OSCam-Emu-Git erfolgreich gepatcht",
+            "✅ OSCam-Emu Git patched successfully"
+        )
+
+        # --------------------------------------------------------
+        # GANZ WICHTIG:
+        # 100 % + Abschlussmeldung in EINEM Aufruf.
+        #
+        # Danach wird kein weiterer Fortschrittstext mehr gesetzt.
+        # --------------------------------------------------------
+
+        update_progress(
             100,
-            "✅ Patch fertig – bereit für GitHub!"
+            success_text
+        )
+
+        log(
+            ""
         )
 
         log(
@@ -10760,7 +10959,7 @@ def patch_oscam_emu_git(
         )
 
         log(
-            "✅ OSCam-Emu Patch erfolgreich erstellt.",
+            success_text,
             "success"
         )
 
@@ -10808,18 +11007,43 @@ def patch_oscam_emu_git(
         )
 
         log(
-            f"❌ {error_text}",
+            ""
+        )
+
+        log(
+            "════════════════════════════════════════════",
             "error"
         )
 
-        update_p(
+        log(
+            "❌ OSCAM-EMU-GIT PATCH FEHLGESCHLAGEN",
+            "error"
+        )
+
+        log(
+            "════════════════════════════════════════════",
+            "error"
+        )
+
+        log(
+            error_text,
+            "error"
+        )
+
+        failed_text = tr(
+            "patch_emu_git_failed",
+            "❌ OSCam-Emu-Git konnte nicht gepatcht werden",
+            "❌ OSCam-Emu Git patching failed"
+        )
+
+        update_progress(
             100,
-            "❌ Patch fehlgeschlagen",
-            is_err=True
+            failed_text,
+            error=True
         )
 
         # --------------------------------------------------------
-        # Temporäres Repository aufräumen
+        # TEMPORÄRES REPOSITORY AUFRÄUMEN
         # --------------------------------------------------------
 
         if temp_dir and os.path.exists(
@@ -10846,6 +11070,8 @@ def patch_oscam_emu_git(
         )
 
         return False
+
+
 
 
 
