@@ -4734,23 +4734,40 @@ def run_bash(cmd, cwd=None, info_widget=None, lang="DE", logger=None):
 def github_upload_oscam_emu_folder(
     gui_instance=None, info_widget=None, progress_callback=None
 ):
-    """Lädt den gesamten OSCam-EMU-Git-Ordner auf GitHub hoch.
+    """Lädt den gesamten OSCam-EMU-Git-Ordner nach speedy005/Oscam-emu.
     Neon-Regenbogen-ProgressBar, schwarze Schrift, 20px, DE/EN Support.
     """
-    from PyQt6.QtWidgets import QTextEdit, QApplication
-    import os, subprocess
 
-    # --- Final Label verstecken ---
+    from PyQt6.QtWidgets import QTextEdit, QApplication
+    import os
+    import subprocess
+
+    # ------------------------------------------------------------
+    # Final Label verstecken
+    # ------------------------------------------------------------
     if gui_instance and hasattr(gui_instance, "hide_final_label"):
         gui_instance.hide_final_label()
 
-    # --- Referenzen & Sprache ---
+    # ------------------------------------------------------------
+    # Referenzen & Sprache
+    # ------------------------------------------------------------
     widget = info_widget or getattr(gui_instance, "info_text", None)
     pbar = getattr(gui_instance, "progress_bar", None)
-    lang = str(getattr(gui_instance, "LANG", "de")).lower()[:2]
+
+    lang = str(
+        getattr(gui_instance, "LANG", "de")
+    ).lower()[:2]
+
     is_de = lang == "de"
 
-    # --- Styles (Neon-Look) ---
+    # ------------------------------------------------------------
+    # GitHub Ziel-Repository
+    # ------------------------------------------------------------
+    TARGET_REPO_URL = "https://github.com/speedy005/Oscam-emu.git"
+
+    # ------------------------------------------------------------
+    # ProgressBar Style
+    # ------------------------------------------------------------
     STYLE_BASE = """
         QProgressBar {{
             border: 2px solid #444444;
@@ -4762,137 +4779,670 @@ def github_upload_oscam_emu_folder(
             font-size: 20px;
             min-height: 35px;
         }}
+
         QProgressBar::chunk {{
             background-color: {chunk_color};
             border-radius: 6px;
         }}
     """
-    
+
     RAINBOW_GRADIENT = (
-        "qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, "
-        "stop:0 #FF00FF, stop:0.5 #00FFFF, stop:1 #39FF14)"
+        "qlineargradient("
+        "spread:pad, "
+        "x1:0, y1:0, x2:1, y2:0, "
+        "stop:0 #FF00FF, "
+        "stop:0.5 #00FFFF, "
+        "stop:1 #39FF14)"
     )
 
-    # --- Hilfsfunktionen ---
+    last_progress = 0
+
+    # ------------------------------------------------------------
+    # Übersetzung
+    # ------------------------------------------------------------
+    def tr(key, de_text, en_text):
+        texts = globals().get("TEXTS", {})
+
+        try:
+            lang_dict = texts.get(lang, {})
+            value = lang_dict.get(key)
+
+            if value:
+                return value
+        except Exception:
+            pass
+
+        return de_text if is_de else en_text
+
+    # ------------------------------------------------------------
+    # ProgressBar
+    # ------------------------------------------------------------
     def update_p(val, txt=None, is_err=False):
+        nonlocal last_progress
+
+        last_progress = val
+
         if pbar:
-            chunk = "qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 #800, stop:1 #F00)" if is_err else RAINBOW_GRADIENT
-            t_color = "#FF0000" if is_err else "black"
-            
-            pbar.setStyleSheet(STYLE_BASE.format(text_color=t_color, chunk_color=chunk))
-            pbar.setValue(val)
-            pbar.setFormat(txt if txt else f"{val}%")
+            if is_err:
+                chunk = (
+                    "qlineargradient("
+                    "spread:pad, "
+                    "x1:0, y1:0, x2:1, y2:0, "
+                    "stop:0 #800000, "
+                    "stop:1 #FF0000)"
+                )
+                text_color = "#FF0000"
+            else:
+                chunk = RAINBOW_GRADIENT
+                text_color = "black"
+
+            pbar.setStyleSheet(
+                STYLE_BASE.format(
+                    text_color=text_color,
+                    chunk_color=chunk
+                )
+            )
+
+            pbar.setValue(int(val))
+
+            if txt:
+                pbar.setFormat(txt)
+            else:
+                pbar.setFormat(f"{val}%")
+
             pbar.show()
+
         if progress_callback:
-            try: progress_callback(val)
-            except: pass
+            try:
+                progress_callback(val)
+            except Exception:
+                pass
+
         QApplication.processEvents()
 
+    # ------------------------------------------------------------
+    # Logging
+    # ------------------------------------------------------------
     def log(text, level="info"):
-        if gui_instance and hasattr(gui_instance, "append_info"):
-            gui_instance.append_info(widget, text, level)
-        elif isinstance(widget, QTextEdit):
-            color = {"success": "#39FF14", "warning": "orange", "error": "red"}.get(level, "gray")
-            widget.append(f'<span style="color:{color}">{text}</span>')
+        try:
+            if gui_instance and hasattr(gui_instance, "append_info"):
+                gui_instance.append_info(
+                    widget,
+                    text,
+                    level
+                )
+
+            elif isinstance(widget, QTextEdit):
+                color = {
+                    "success": "#39FF14",
+                    "warning": "orange",
+                    "error": "red"
+                }.get(level, "gray")
+
+                widget.append(
+                    f'<span style="color:{color}">{text}</span>'
+                )
+
+        except Exception:
+            pass
+
         QApplication.processEvents()
 
+    # ------------------------------------------------------------
+    # Sound
+    # ------------------------------------------------------------
     def play_sound(success=True):
-        if "safe_play" in globals():
-            safe_play("complete.oga" if success else "dialog-error.oga")
+        try:
+            if "safe_play" in globals():
+                safe_play(
+                    "complete.oga"
+                    if success
+                    else "dialog-error.oga"
+                )
+        except Exception:
+            pass
 
-    # --- Start ---
-    update_p(5, "⏳ Start..." if is_de else "⏳ Starting...")
-    
+    # ------------------------------------------------------------
+    # START
+    # ------------------------------------------------------------
+    update_p(
+        5,
+        tr(
+            "github_upload_start",
+            "⏳ GitHub-Upload wird gestartet...",
+            "⏳ Starting GitHub upload..."
+        )
+    )
+
+    # ------------------------------------------------------------
+    # GitHub Config laden
+    # ------------------------------------------------------------
     cfg_func = globals().get("load_github_config")
+
     if not cfg_func:
-        update_p(100, "❌ Config Error", is_err=True)
-        log("Konfigurations-Ladefunktion fehlt!", "error")
+        update_p(
+            last_progress,
+            tr(
+                "github_upload_failed",
+                "❌ GitHub-Konfiguration fehlt",
+                "❌ GitHub configuration missing"
+            ),
+            is_err=True
+        )
+
+        log(
+            "Konfigurations-Ladefunktion fehlt!",
+            "error"
+        )
+
         play_sound(False)
         return
 
-    cfg = cfg_func()
-    repo_url = cfg.get("emu_repo_url")
+    try:
+        cfg = cfg_func()
+    except Exception as exc:
+        update_p(
+            last_progress,
+            tr(
+                "github_upload_failed",
+                "❌ GitHub-Konfiguration konnte nicht geladen werden",
+                "❌ GitHub configuration could not be loaded"
+            ),
+            is_err=True
+        )
+
+        log(
+            f"GitHub-Konfiguration konnte nicht geladen werden: {exc}",
+            "error"
+        )
+
+        play_sound(False)
+        return
+
+    # ------------------------------------------------------------
+    # Credentials
+    # ------------------------------------------------------------
+    username = cfg.get("username")
+    token = cfg.get("token")
+
+    user_name = cfg.get("user_name")
+    user_email = cfg.get("user_email")
+
     branch = cfg.get("emu_branch", "master")
-    username, token = cfg.get("username"), cfg.get("token")
-    user_name, user_email = cfg.get("user_name"), cfg.get("user_email")
 
-    if not all([repo_url, branch, username, token, user_name, user_email]):
-        update_p(100, "❌ Auth Error", is_err=True)
-        log("Credentials oder Repo-URL fehlen in der Config!", "error")
+    if not username or not token:
+        update_p(
+            last_progress,
+            tr(
+                "github_upload_auth_error",
+                "❌ GitHub-Zugangsdaten fehlen",
+                "❌ GitHub credentials missing"
+            ),
+            is_err=True
+        )
+
+        log(
+            "GitHub Username oder Token fehlt in der Config.",
+            "error"
+        )
+
         play_sound(False)
         return
 
+    if not user_name or not user_email:
+        update_p(
+            last_progress,
+            tr(
+                "github_upload_git_error",
+                "❌ Git-Konfiguration fehlt",
+                "❌ Git configuration missing"
+            ),
+            is_err=True
+        )
+
+        log(
+            "Git user.name oder user.email fehlt in der Config.",
+            "error"
+        )
+
+        play_sound(False)
+        return
+
+    # ------------------------------------------------------------
+    # Lokales OSCam-EMU-Git-Verzeichnis
+    # ------------------------------------------------------------
     target_dir = globals().get("PATCH_EMU_GIT_DIR")
-    if not target_dir or not os.path.exists(target_dir):
-        update_p(100, "❌ Folder", is_err=True)
-        log("Zielordner für den Upload existiert nicht!", "error")
+
+    if not target_dir:
+        update_p(
+            last_progress,
+            tr(
+                "github_upload_folder_error",
+                "❌ OSCam-Emu-Git-Ordner fehlt",
+                "❌ OSCam-Emu-Git folder missing"
+            ),
+            is_err=True
+        )
+
+        log(
+            "PATCH_EMU_GIT_DIR ist nicht definiert.",
+            "error"
+        )
+
         play_sound(False)
         return
 
-    # --- Git Init & Setup ---
-    update_p(20, "🔧 Git Setup..." if is_de else "🔧 Setup Git...")
-    git_dir = os.path.join(target_dir, ".git")
-    token_url = repo_url.replace("https://", f"https://{username}:{token}@")
+    target_dir = os.path.abspath(target_dir)
+
+    if not os.path.isdir(target_dir):
+        update_p(
+            last_progress,
+            tr(
+                "github_upload_folder_error",
+                "❌ OSCam-Emu-Git-Ordner fehlt",
+                "❌ OSCam-Emu-Git folder missing"
+            ),
+            is_err=True
+        )
+
+        log(
+            f"Zielordner existiert nicht:\n{target_dir}",
+            "error"
+        )
+
+        play_sound(False)
+        return
+
+    # ------------------------------------------------------------
+    # Sicherheits-Log
+    # ------------------------------------------------------------
+    log(
+        "GitHub-Ziel:"
+    )
+
+    log(
+        "https://github.com/speedy005/Oscam-emu.git"
+    )
+
+    log(
+        f"Lokaler Ordner:\n{target_dir}"
+    )
+
+    # ------------------------------------------------------------
+    # Git Setup
+    # ------------------------------------------------------------
+    update_p(
+        20,
+        tr(
+            "github_upload_git_setup",
+            "🔧 Git wird vorbereitet...",
+            "🔧 Preparing Git..."
+        )
+    )
+
+    git_dir = os.path.join(
+        target_dir,
+        ".git"
+    )
+
+    # ------------------------------------------------------------
+    # Authenticated HTTPS URL
+    # ------------------------------------------------------------
+    token_url = (
+        TARGET_REPO_URL.replace(
+            "https://",
+            f"https://{username}:{token}@"
+        )
+    )
+
     silent_env = os.environ.copy()
     silent_env["GIT_TERMINAL_PROMPT"] = "0"
 
     try:
+
+        # --------------------------------------------------------
+        # Repository initialisieren
+        # --------------------------------------------------------
         if not os.path.exists(git_dir):
-            log("Git Repo wird initialisiert...", "warning")
-            subprocess.run(["git", "init"], cwd=target_dir, capture_output=True)
-            subprocess.run(["git", "remote", "add", "origin", token_url], cwd=target_dir, capture_output=True)
-            subprocess.run(["git", "checkout", "-b", branch], cwd=target_dir, capture_output=True)
+
+            log(
+                "Git-Repository wird initialisiert...",
+                "info"
+            )
+
+            subprocess.run(
+                ["git", "init"],
+                cwd=target_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=True
+            )
+
+            subprocess.run(
+                [
+                    "git",
+                    "remote",
+                    "add",
+                    "origin",
+                    token_url
+                ],
+                cwd=target_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=True
+            )
+
+            subprocess.run(
+                [
+                    "git",
+                    "checkout",
+                    "-b",
+                    branch
+                ],
+                cwd=target_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=True
+            )
+
         else:
-            log("Remote wird aktualisiert...", "info")
-            subprocess.run(["git", "remote", "remove", "origin"], cwd=target_dir, capture_output=True)
-            subprocess.run(["git", "remote", "add", "origin", token_url], cwd=target_dir, capture_output=True)
 
-        # --- Config ---
-        update_p(40, "📝 Config..." if is_de else "📝 Configuring...")
-        subprocess.run(["git", "config", "user.name", user_name], cwd=target_dir, capture_output=True)
-        subprocess.run(["git", "config", "user.email", user_email], cwd=target_dir, capture_output=True)
+            log(
+                "Git-Remote wird aktualisiert...",
+                "info"
+            )
 
-        # --- Add & Commit ---
-        update_p(60, "📦 Dateien..." if is_de else "📦 Files...")
-        log("Dateien werden hinzugefügt...")
-        subprocess.run(["git", "add", "."], cwd=target_dir, capture_output=True)
+            subprocess.run(
+                [
+                    "git",
+                    "remote",
+                    "remove",
+                    "origin"
+                ],
+                cwd=target_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace"
+            )
 
+            subprocess.run(
+                [
+                    "git",
+                    "remote",
+                    "add",
+                    "origin",
+                    token_url
+                ],
+                cwd=target_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=True
+            )
+
+        # --------------------------------------------------------
+        # Git Config
+        # --------------------------------------------------------
+        update_p(
+            35,
+            tr(
+                "github_upload_git_config",
+                "📝 Git wird konfiguriert...",
+                "📝 Configuring Git..."
+            )
+        )
+
+        subprocess.run(
+            [
+                "git",
+                "config",
+                "user.name",
+                user_name
+            ],
+            cwd=target_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True
+        )
+
+        subprocess.run(
+            [
+                "git",
+                "config",
+                "user.email",
+                user_email
+            ],
+            cwd=target_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True
+        )
+
+        # --------------------------------------------------------
+        # Dateien hinzufügen
+        # --------------------------------------------------------
+        update_p(
+            55,
+            tr(
+                "github_upload_files",
+                "📦 OSCam-Emu-Dateien werden vorbereitet...",
+                "📦 Preparing OSCam-Emu files..."
+            )
+        )
+
+        log(
+            "Alle Dateien werden zu Git hinzugefügt..."
+        )
+
+        subprocess.run(
+            ["git", "add", "."],
+            cwd=target_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True
+        )
+
+        # --------------------------------------------------------
+        # Commit-Nachricht
+        # --------------------------------------------------------
         commit_msg_final = "Sync OSCam-Emu folder"
-        header_func = globals().get("get_patch_header")
+
+        header_func = globals().get(
+            "get_patch_header"
+        )
+
         if header_func:
             try:
                 raw = header_func()
-                if raw: 
-                    # Korrektur: splitlines() gibt Liste zurück, wir brauchen Index 0
-                    commit_msg_final = raw.splitlines()[0]
-            except: pass
 
-        subprocess.run(["git", "commit", "-m", commit_msg_final, "--allow-empty"], cwd=target_dir, capture_output=True)
+                if raw:
+                    first_line = raw.splitlines()
 
-        # --- Push ---
-        update_p(80, "🚀 Upload..." if is_de else "🚀 Pushing...")
-        log("Push zu GitHub gestartet...", "warning")
-        push = subprocess.run(
-            ["git", "push", "--force", "origin", branch],
-            cwd=target_dir, capture_output=True, text=True, env=silent_env
+                    if first_line:
+                        commit_msg_final = (
+                            first_line[0].strip()
+                        )
+
+            except Exception:
+                pass
+
+        # --------------------------------------------------------
+        # Commit
+        # --------------------------------------------------------
+        update_p(
+            70,
+            tr(
+                "github_upload_commit",
+                "💾 Änderungen werden committed...",
+                "💾 Committing changes..."
+            )
         )
 
-        if push.returncode == 0:
-            final_txt = "✅ Synchronisiert" if is_de else "✅ Synced"
-            update_p(100, final_txt)
-            log(f"Erfolg: {final_txt}", "success")
-            play_sound(True)
-        else:
-            fail_txt = "❌ Fehlgeschlagen" if is_de else "❌ Failed"
-            update_p(100, fail_txt, is_err=True)
-            # Nutzt stderr für detaillierte Fehlersuche im Log
-            log(f"GitHub Error: {push.stderr.strip()[:100]}", "error")
-            play_sound(False)
+        log(
+            f"Commit: {commit_msg_final}"
+        )
 
-    except Exception as e:
-        update_p(100, "❌ Error", is_err=True)
-        log(f"Kritischer Fehler: {e}", "error")
+        commit = subprocess.run(
+            [
+                "git",
+                "commit",
+                "-m",
+                commit_msg_final,
+                "--allow-empty"
+            ],
+            cwd=target_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=silent_env
+        )
+
+        if commit.returncode != 0:
+            log(
+                commit.stderr.strip(),
+                "warning"
+            )
+
+        # --------------------------------------------------------
+        # PUSH
+        # --------------------------------------------------------
+        update_p(
+            85,
+            tr(
+                "github_upload_push",
+                "🚀 OSCam-Emu wird zu GitHub hochgeladen...",
+                "🚀 Uploading OSCam-Emu to GitHub..."
+            )
+        )
+
+        log(
+            "Push zu GitHub gestartet...",
+            "warning"
+        )
+
+        push = subprocess.run(
+            [
+                "git",
+                "push",
+                "--force",
+                "origin",
+                branch
+            ],
+            cwd=target_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=silent_env
+        )
+
+        # --------------------------------------------------------
+        # PUSH ERFOLGREICH
+        # --------------------------------------------------------
+        if push.returncode == 0:
+
+            final_txt = tr(
+                "github_upload_success",
+                "✅ OSCam-Emu erfolgreich zu GitHub hochgeladen",
+                "✅ OSCam-Emu successfully uploaded to GitHub"
+            )
+
+            update_p(
+                100,
+                final_txt
+            )
+
+            log(
+                final_txt,
+                "success"
+            )
+
+            log(
+                "Repository: https://github.com/speedy005/Oscam-emu",
+                "success"
+            )
+
+            play_sound(True)
+            return
+
+        # --------------------------------------------------------
+        # PUSH FEHLER
+        # --------------------------------------------------------
+        error_text = (
+            push.stderr.strip()
+            or push.stdout.strip()
+            or "Unbekannter GitHub-Fehler"
+        )
+
+        fail_txt = tr(
+            "github_upload_failed",
+            "❌ GitHub-Upload fehlgeschlagen",
+            "❌ GitHub upload failed"
+        )
+
+        update_p(
+            last_progress,
+            fail_txt,
+            is_err=True
+        )
+
+        log(
+            f"GitHub Error:\n{error_text}",
+            "error"
+        )
+
         play_sound(False)
+
+    # ------------------------------------------------------------
+    # Allgemeiner Fehler
+    # ------------------------------------------------------------
+    except Exception as exc:
+
+        fail_txt = tr(
+            "github_upload_failed",
+            "❌ GitHub-Upload fehlgeschlagen",
+            "❌ GitHub upload failed"
+        )
+
+        update_p(
+            last_progress,
+            fail_txt,
+            is_err=True
+        )
+
+        log(
+            f"Kritischer Fehler:\n{exc}",
+            "error"
+        )
+
+        play_sound(False)
+
+
 
 # =====================
 # GITHUB CONFIG DIALOG
