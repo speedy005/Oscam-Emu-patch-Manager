@@ -1,7 +1,7 @@
 import os
 import sys
 import platform
-import importlib.util
+import importlib.util 
 # ============================================================
 # QT / PLATTFORM-UMGEBUNG
 # ============================================================
@@ -860,7 +860,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "7.2.6"
+APP_VERSION = "7.2.7"
 # ===================== PATCH DIRS =====================
 def get_best_patch_dir():
     """Bestimmt den besten Patch-Ordner (S3, lokal, Home)."""
@@ -5797,7 +5797,7 @@ class CinematicMatrixSplash(QWidget):
             r" █  |_|   |_||__| |__||_|  |__||__| |__||_______||_______||___|  |_|      █ ",
             r" █                                                                        █ ",
             r" █──────────────────[ SYSTEM: NEURAL_LINK OPERATIONAL ]───────────────────█ ",
-            r" █                   >> OSCAM EMU PATCH MANAGER v7.2.6  <<               █ ",
+            r" █                   >> OSCAM EMU PATCH MANAGER v7.2.7  <<               █ ",
             r" █             >> CODENAME: Speedy_Oscam-_Patch_Manager 2026 <<           █ ",
             r" ◥◣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◢◤ "
         ]
@@ -25923,19 +25923,28 @@ if __name__ == "__main__":
             if system == "Windows":
                 if not ctypes.windll.shell32.IsUserAnAdmin():
                     print("[SYSTEM] Fordere Windows-Admin-Rechte an...")
-                    # Windows benötigt korrekt gequotete Argumente,
-                    # insbesondere bei Installationspfaden mit Leerzeichen.
+
+                    script = os.path.abspath(sys.argv[0])
+
                     params = subprocess.list2cmdline(
-                        sys.argv[1:] + ["--elevated"]
+                        [script] + sys.argv[1:] + ["--elevated"]
                     )
-                    ctypes.windll.shell32.ShellExecuteW(
+
+                    result = ctypes.windll.shell32.ShellExecuteW(
                         None,
                         "runas",
                         sys.executable,
                         params,
-                        None,
+                        os.path.dirname(script),
                         1
                     )
+
+                    if result <= 32:
+                        print(f"[FEHLER] Windows konnte den Prozess nicht erhöhen. Fehlercode: {result}")
+                        input("ENTER zum Beenden...")
+                        sys.exit(1)
+
+                    print("[SYSTEM] Administrator-Prozess wurde gestartet.")
                     sys.exit(0)
             
             elif system == "Linux":
