@@ -860,7 +860,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "7.2.7"
+APP_VERSION = "7.2.8"
 # ===================== PATCH DIRS =====================
 def get_best_patch_dir():
     """Bestimmt den besten Patch-Ordner (S3, lokal, Home)."""
@@ -5797,7 +5797,7 @@ class CinematicMatrixSplash(QWidget):
             r" █  |_|   |_||__| |__||_|  |__||__| |__||_______||_______||___|  |_|      █ ",
             r" █                                                                        █ ",
             r" █──────────────────[ SYSTEM: NEURAL_LINK OPERATIONAL ]───────────────────█ ",
-            r" █                   >> OSCAM EMU PATCH MANAGER v7.2.7  <<               █ ",
+            r" █                   >> OSCAM EMU PATCH MANAGER v7.2.8  <<               █ ",
             r" █             >> CODENAME: Speedy_Oscam-_Patch_Manager 2026 <<           █ ",
             r" ◥◣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◢◤ "
         ]
@@ -12205,192 +12205,738 @@ class PatchManagerGUI(QWidget):
 
         QApplication.processEvents()
     
+
     def show_commits(self, info_widget=None, progress_callback=None, num_commits=None):
         """
-        Zeigt die letzten Commits an – lokal aus TEMP_REPO oder online per Git-Clone.
-        Regenbogen-ProgressBar, Sound und 3 Sekunden Anzeige am Ende.
-        Bei Fehlern (Netzwerk, Repo) sauber abbrechen.
+        Zeigt die letzten Commits an.
+
+        Ablauf:
+        1. TEMP_REPO prüfen.
+        2. Wenn TEMP_REPO ein gültiges Git-Repository ist:
+           -> lokale Commits lesen.
+        3. Wenn TEMP_REPO nicht existiert oder kein Git-Repository ist:
+           -> Repository temporär online klonen.
+        4. Commits anzeigen.
+        5. Progressbar und Sound aktualisieren.
+        6. Temporäres Repository immer wieder löschen.
+
+        Unterstützt:
+        - PyQt6 QTextEdit
+        - QSpinBox / QDoubleSpinBox / Integer für num_commits
+        - Deutsch / Englisch
+        - progress_callback
+        - Regenbogen-Progressbar
+        - Fehlerstatus
         """
 
-        # --- Final Label verstecken ---
+        # ------------------------------------------------------------
+        # Final Label verstecken
+        # ------------------------------------------------------------
         if hasattr(self, "hide_final_label"):
-            self.hide_final_label()
+            try:
+                self.hide_final_label()
+            except Exception:
+                pass
 
+        # ------------------------------------------------------------
+        # Imports
+        # ------------------------------------------------------------
         from PyQt6.QtWidgets import QTextEdit, QApplication
         from PyQt6.QtCore import QTimer
-        import os, tempfile, shutil, subprocess
 
+        import os
+        import tempfile
+        import shutil
+        import subprocess
+
+        # ------------------------------------------------------------
+        # Sprache
+        # ------------------------------------------------------------
+        lang = getattr(self, "LANG", "de").lower()
+        is_de = lang.startswith("de")
+
+        # ------------------------------------------------------------
+        # Info-Widget bestimmen
+        # ------------------------------------------------------------
         if not isinstance(info_widget, QTextEdit):
             info_widget = getattr(self, "info_text", None)
-            if info_widget is None:
-                return
 
-            lang = getattr(self, "LANG", "de").lower()
-            is_de = lang.startswith("de")
-            pbar = getattr(self, "progress_bar", None)
-        
-            # --- FEHLERBEHEBUNG: Widget-Referenz sauber trennen ---
-            commit_widget = num_commits or getattr(self, "commit_spin", None)
-            total_commits = commit_widget.value() if hasattr(commit_widget, "value") else 10
+        # ------------------------------------------------------------
+        # Progressbar
+        # ------------------------------------------------------------
+        pbar = getattr(self, "progress_bar", None)
 
-        def log(text, level="info"):
-            if info_widget:
-                self.append_info(info_widget, text, level)
+        # ------------------------------------------------------------
+        # Anzahl Commits bestimmen
+        #
+        # Erlaubt:
+        #   num_commits = 10
+        #   num_commits = QSpinBox
+        #   num_commits = None -> self.commit_spin
+        # ------------------------------------------------------------
+        try:
+            if hasattr(num_commits, "value") and callable(num_commits.value):
+                total_commits = int(num_commits.value())
+
+            elif num_commits is not None:
+                total_commits = int(num_commits)
+
             else:
+                commit_spin = getattr(self, "commit_spin", None)
+
+                if hasattr(commit_spin, "value") and callable(commit_spin.value):
+                    total_commits = int(commit_spin.value())
+                else:
+                    total_commits = 10
+
+        except (TypeError, ValueError):
+            total_commits = 10
+
+        # Sinnvolle Grenzen
+        total_commits = max(1, min(total_commits, 1000))
+
+        # ------------------------------------------------------------
+        # Hilfsfunktion: Logging
+        # ------------------------------------------------------------
+        def log(text, level="info"):
+            try:
+                if info_widget is not None and hasattr(self, "append_info"):
+                    self.append_info(info_widget, text, level)
+                else:
+                    print(f"[{level.upper()}] {text}")
+            except Exception:
                 print(f"[{level.upper()}] {text}")
 
-        def set_progress(val, text=None, is_err=False):
-            if not pbar:
+        # ------------------------------------------------------------
+        # Hilfsfunktion: Progressbar
+        # ------------------------------------------------------------
+        def set_progress(value, text=None, is_err=False):
+            if pbar is None:
                 return
-            rainbow = (
-                "qlineargradient(x1:0, y1:0, x2:1, y2:0,"
-                " stop:0 #FF0000, stop:0.2 #FF7F00, stop:0.4 #FFFF00,"
-                " stop:0.6 #00FF00, stop:0.8 #0000FF, stop:1 #8B00FF)"
-            )
-            if is_err:
-                style = """
-                    QProgressBar { text-align: center; font-weight: bold; border: 2px solid #500;
-                                  border-radius: 6px; background-color: #111; color: #FF0000; font-size: 15pt; }
-                    QProgressBar::chunk { background-color: #800; border-radius: 4px; }
-                """
-            else:
-                style = f"""
-                    QProgressBar {{
-                        text-align: center; font-weight: bold; border: 2px solid #222;
-                        border-radius: 6px; background-color: #111; color: black; font-size: 15pt;
-                    }}
-                    QProgressBar::chunk {{
-                        background-color: {rainbow}; border-radius: 4px;
-                    }}
-                """
-            pbar.setStyleSheet(style)
-            pbar.setValue(val)
-            pbar.setFormat(text if text else "%p%")
-            pbar.show()
-            QApplication.processEvents()
-            if progress_callback:
-                try:
-                    progress_callback(val)
-                except Exception:
-                    pass
 
+            try:
+                value = max(0, min(100, int(value)))
+
+                rainbow = (
+                    "qlineargradient("
+                    "x1:0, y1:0, x2:1, y2:0,"
+                    "stop:0 #FF0000,"
+                    "stop:0.2 #FF7F00,"
+                    "stop:0.4 #FFFF00,"
+                    "stop:0.6 #00FF00,"
+                    "stop:0.8 #0000FF,"
+                    "stop:1 #8B00FF"
+                    ")"
+                )
+
+                if is_err:
+                    style = """
+                        QProgressBar {
+                            text-align: center;
+                            font-weight: bold;
+                            border: 2px solid #500;
+                            border-radius: 6px;
+                            background-color: #111;
+                            color: #FF0000;
+                            font-size: 15pt;
+                        }
+
+                        QProgressBar::chunk {
+                            background-color: #800;
+                            border-radius: 4px;
+                        }
+                    """
+                else:
+                    style = f"""
+                        QProgressBar {{
+                            text-align: center;
+                            font-weight: bold;
+                            border: 2px solid #222;
+                            border-radius: 6px;
+                            background-color: #111;
+                            color: black;
+                            font-size: 15pt;
+                        }}
+
+                        QProgressBar::chunk {{
+                            background: {rainbow};
+                            border-radius: 4px;
+                        }}
+                    """
+
+                pbar.setStyleSheet(style)
+                pbar.setValue(value)
+
+                if text:
+                    pbar.setFormat(str(text))
+                else:
+                    pbar.setFormat("%p%")
+
+                pbar.show()
+
+                QApplication.processEvents()
+
+                if progress_callback:
+                    try:
+                        progress_callback(value)
+                    except Exception:
+                        pass
+
+            except Exception as e:
+                print(f"[WARNING] Progressbar error: {e}")
+
+        # ------------------------------------------------------------
+        # Hilfsfunktion: Progressbar am Ende
+        # ------------------------------------------------------------
         def finalize_pbar(text, visible_seconds=3):
-            if not pbar:
+            if pbar is None:
                 return
-            pbar.setValue(100)
-            pbar.setFormat(text)
-            QTimer.singleShot(
-                visible_seconds * 1000,
-                lambda: pbar.setStyleSheet(
-                    """
-                    QProgressBar {
-                        text-align: center; font-weight: bold; border: 2px solid #222;
-                        border-radius: 6px; background-color: #111; color: black; font-size: 15pt;
-                    }
-                    QProgressBar::chunk { background-color: transparent; }
-                    """
-                ),
-            )
-            QTimer.singleShot(visible_seconds * 1000, lambda: pbar.setValue(0))
-            if progress_callback:
-                QTimer.singleShot(visible_seconds * 1000, lambda: progress_callback(0))
 
+            try:
+                pbar.setValue(100)
+                pbar.setFormat(str(text))
+                pbar.show()
+
+                QApplication.processEvents()
+
+                def reset_progress():
+                    try:
+                        pbar.setStyleSheet(
+                            """
+                            QProgressBar {
+                                text-align: center;
+                                font-weight: bold;
+                                border: 2px solid #222;
+                                border-radius: 6px;
+                                background-color: #111;
+                                color: black;
+                                font-size: 15pt;
+                            }
+
+                            QProgressBar::chunk {
+                                background-color: transparent;
+                            }
+                            """
+                        )
+
+                        pbar.setValue(0)
+                        pbar.setFormat("%p%")
+
+                        if progress_callback:
+                            try:
+                                progress_callback(0)
+                            except Exception:
+                                pass
+
+                    except Exception:
+                        pass
+
+                QTimer.singleShot(
+                    int(visible_seconds * 1000),
+                    reset_progress
+                )
+
+            except Exception:
+                pass
+
+        # ------------------------------------------------------------
+        # Hilfsfunktion: Sound
+        # ------------------------------------------------------------
         def play_commit_sound(success=True):
-            safe_play("message-new-instant.oga" if success else "dialog-error.oga")
+            try:
+                sound_file = (
+                    "message-new-instant.oga"
+                    if success
+                    else
+                    "dialog-error.oga"
+                )
 
-        # -------------------------------
+                if "safe_play" in globals():
+                    safe_play(sound_file)
+
+                elif hasattr(self, "safe_play"):
+                    self.safe_play(sound_file)
+
+            except Exception:
+                pass
+
+        # ------------------------------------------------------------
+        # Hilfsfunktion: Git-Befehl
+        # ------------------------------------------------------------
+        def run_git_command(args, cwd=None):
+            """
+            Führt einen Git-Befehl aus und gibt:
+                success, stdout, stderr
+            zurück.
+            """
+
+            try:
+                result = subprocess.run(
+                    args,
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )
+
+                return (
+                    result.returncode == 0,
+                    result.stdout.strip(),
+                    result.stderr.strip(),
+                )
+
+            except FileNotFoundError:
+                return (
+                    False,
+                    "",
+                    "Git wurde nicht gefunden. Bitte Git installieren.",
+                )
+
+            except Exception as e:
+                return (
+                    False,
+                    "",
+                    str(e),
+                )
+
+        # ------------------------------------------------------------
         # START
-        # -------------------------------
-        set_progress(10, "Lade Commits..." if is_de else "Loading commits...")
-        log(TEXTS.get(lang, {}).get("loading_commits", "Lade Commits..."), "warning")
+        # ------------------------------------------------------------
+        set_progress(
+            5,
+            "Bereite Commit-Anzeige vor..."
+            if is_de
+            else
+            "Preparing commit display..."
+        )
 
+        log(
+            TEXTS.get(lang, {}).get(
+                "loading_commits",
+                "Lade Commits..."
+                if is_de
+                else
+                "Loading commits..."
+            ),
+            "warning",
+        )
+
+        # ------------------------------------------------------------
+        # Repository-Daten
+        # ------------------------------------------------------------
         repo_url = "https://git.streamboard.tv/common/oscam.git"
         branch = "master"
+
         temp_dir = None
         output = ""
 
+        # ------------------------------------------------------------
+        # TEMP_REPO aus globals / self holen
+        # ------------------------------------------------------------
         try:
-            if os.path.exists(TEMP_REPO):
-                # Lokaler Repo vorhanden
-                cmd = f"git log -n {num_commits} --oneline"
-                set_progress(
-                    40,
-                    "Lese lokale Commits..." if is_de else "Reading local commits...",
-                )
-                output = self.run_command(cmd, cwd=TEMP_REPO)
-            else:
-                # Online Repo: temporäres Clone
-                temp_dir = tempfile.mkdtemp(prefix="oscam_git_")
-                set_progress(
-                    40, "Clone Repository..." if is_de else "Cloning repository..."
-                )
-                try:
-                    subprocess.run(
-                        [
-                            "git",
-                            "clone",
-                            "--depth",
-                            str(num_commits),
-                            "--branch",
-                            branch,
-                            repo_url,
-                            temp_dir,
-                        ],
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                    )
-                except subprocess.CalledProcessError as e:
-                    log(f"❌ Fehler beim Klonen: {e.stderr.strip()}", "error")
-                    set_progress(100, "❌ Clone Fehler", is_err=True)
-                    play_commit_sound(False)
-                    return
+            local_repo = TEMP_REPO
+        except NameError:
+            local_repo = getattr(self, "TEMP_REPO", None)
 
-                set_progress(
-                    70,
-                    "Lese online Commits..." if is_de else "Reading online commits...",
-                )
-                try:
-                    result = subprocess.run(
-                        ["git", "log", f"-n{num_commits}", "--oneline"],
-                        cwd=temp_dir,
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                    )
-                    output = result.stdout
-                except subprocess.CalledProcessError as e:
-                    log(
-                        f"❌ Fehler beim Lesen der Commits: {e.stderr.strip()}", "error"
-                    )
-                    set_progress(100, "❌ Fehler", is_err=True)
-                    play_commit_sound(False)
-                    return
+        # ------------------------------------------------------------
+        # Prüfen, ob TEMP_REPO gültig ist
+        # ------------------------------------------------------------
+        local_repo_valid = False
 
-            if output:
-                lines = output.strip().splitlines()
-                for line in lines:
-                    log(f"• {line}", "info")
-                set_progress(90, "✅ Commits geladen" if is_de else "✅ Commits loaded")
+        if local_repo and os.path.isdir(local_repo):
+
+            set_progress(
+                15,
+                "Prüfe lokales Repository..."
+                if is_de
+                else
+                "Checking local repository..."
+            )
+
+            success, stdout, stderr = run_git_command(
+                [
+                    "git",
+                    "-C",
+                    local_repo,
+                    "rev-parse",
+                    "--is-inside-work-tree",
+                ]
+            )
+
+            if success and stdout.lower() == "true":
+                local_repo_valid = True
+
+        # ============================================================
+        # HAUPTVERARBEIT
+        # ============================================================
+        try:
+
+            # ========================================================
+            # FALL 1: Lokales Git-Repository
+            # ========================================================
+            if local_repo_valid:
+
                 log(
-                    f"✅ {TEXTS.get(lang, {}).get('commits_loaded', 'Commits erfolgreich geladen')} ({len(lines)})",
+                    "📁 Lokales Git-Repository gefunden."
+                    if is_de
+                    else
+                    "📁 Local Git repository found.",
+                    "info",
+                )
+
+                set_progress(
+                    35,
+                    "Lese lokale Commits..."
+                    if is_de
+                    else
+                    "Reading local commits..."
+                )
+
+                success, stdout, stderr = run_git_command(
+                    [
+                        "git",
+                        "-C",
+                        local_repo,
+                        "log",
+                        f"-n{total_commits}",
+                        "--oneline",
+                    ]
+                )
+
+                if not success:
+
+                    log(
+                        f"❌ Git-Fehler: {stderr or 'Unbekannter Fehler'}",
+                        "error",
+                    )
+
+                    set_progress(
+                        100,
+                        "❌ Git-Fehler"
+                        if is_de
+                        else
+                        "❌ Git error",
+                        is_err=True,
+                    )
+
+                    play_commit_sound(False)
+                    return
+
+                output = stdout
+
+            # ========================================================
+            # FALL 2: Kein gültiges lokales Repository
+            #         -> Online Clone
+            # ========================================================
+            else:
+
+                if local_repo and os.path.exists(local_repo):
+
+                    log(
+                        "⚠ TEMP_REPO existiert, ist aber kein gültiges "
+                        "Git-Repository."
+                        if is_de
+                        else
+                        "⚠ TEMP_REPO exists but is not a valid "
+                        "Git repository.",
+                        "warning",
+                    )
+
+                    log(
+                        "🌐 Verwende Online-Repository."
+                        if is_de
+                        else
+                        "🌐 Using online repository.",
+                        "info",
+                    )
+
+                else:
+
+                    log(
+                        "🌐 Kein lokales Repository gefunden."
+                        if is_de
+                        else
+                        "🌐 No local repository found.",
+                        "info",
+                    )
+
+                # ----------------------------------------------------
+                # Temporäres Verzeichnis erstellen
+                # ----------------------------------------------------
+                temp_dir = tempfile.mkdtemp(
+                    prefix="oscam_git_"
+                )
+
+                log(
+                    f"📂 Temporäres Verzeichnis: {temp_dir}",
+                    "info",
+                )
+
+                set_progress(
+                    35,
+                    "Klone Repository..."
+                    if is_de
+                    else
+                    "Cloning repository..."
+                )
+
+                # ----------------------------------------------------
+                # Online Clone
+                # ----------------------------------------------------
+                success, stdout, stderr = run_git_command(
+                    [
+                        "git",
+                        "clone",
+                        "--depth",
+                        str(total_commits),
+                        "--branch",
+                        branch,
+                        repo_url,
+                        temp_dir,
+                    ]
+                )
+
+                if not success:
+
+                    error_text = (
+                        stderr
+                        or stdout
+                        or (
+                            "Unbekannter Fehler beim Klonen."
+                            if is_de
+                            else
+                            "Unknown clone error."
+                        )
+                    )
+
+                    log(
+                        f"❌ Fehler beim Klonen: {error_text}",
+                        "error",
+                    )
+
+                    set_progress(
+                        100,
+                        "❌ Clone Fehler"
+                        if is_de
+                        else
+                        "❌ Clone error",
+                        is_err=True,
+                    )
+
+                    play_commit_sound(False)
+                    return
+
+                # ----------------------------------------------------
+                # Clone erfolgreich
+                # ----------------------------------------------------
+                set_progress(
+                    65,
+                    "Repository geladen..."
+                    if is_de
+                    else
+                    "Repository loaded..."
+                )
+
+                log(
+                    "✅ Repository erfolgreich geklont."
+                    if is_de
+                    else
+                    "✅ Repository cloned successfully.",
                     "success",
                 )
-                play_commit_sound(True)
-                finalize_pbar("✅ Fertig!" if is_de else "✅ Done!")
-            else:
-                log("⚠ Keine Commits gefunden.", "warning")
+
+                # ----------------------------------------------------
+                # Commits lesen
+                # ----------------------------------------------------
+                set_progress(
+                    75,
+                    "Lese Online-Commits..."
+                    if is_de
+                    else
+                    "Reading online commits..."
+                )
+
+                success, stdout, stderr = run_git_command(
+                    [
+                        "git",
+                        "-C",
+                        temp_dir,
+                        "log",
+                        f"-n{total_commits}",
+                        "--oneline",
+                    ]
+                )
+
+                if not success:
+
+                    error_text = (
+                        stderr
+                        or stdout
+                        or (
+                            "Unbekannter Git-Fehler."
+                            if is_de
+                            else
+                            "Unknown Git error."
+                        )
+                    )
+
+                    log(
+                        f"❌ Fehler beim Lesen der Commits: {error_text}",
+                        "error",
+                    )
+
+                    set_progress(
+                        100,
+                        "❌ Fehler"
+                        if is_de
+                        else
+                        "❌ Error",
+                        is_err=True,
+                    )
+
+                    play_commit_sound(False)
+                    return
+
+                output = stdout
+
+            # ========================================================
+            # AUSGABE VERARBEITEN
+            # ========================================================
+            set_progress(
+                90,
+                "Verarbeite Commits..."
+                if is_de
+                else
+                "Processing commits..."
+            )
+
+            lines = [
+                line.strip()
+                for line in output.splitlines()
+                if line.strip()
+            ]
+
+            # --------------------------------------------------------
+            # Keine Commits
+            # --------------------------------------------------------
+            if not lines:
+
+                log(
+                    "⚠ Keine Commits gefunden."
+                    if is_de
+                    else
+                    "⚠ No commits found.",
+                    "warning",
+                )
+
+                set_progress(
+                    100,
+                    "⚠ Keine Commits"
+                    if is_de
+                    else
+                    "⚠ No commits",
+                    is_err=True,
+                )
+
                 play_commit_sound(False)
-                finalize_pbar("⚠ Keine Commits")
 
+                return
+
+            # --------------------------------------------------------
+            # Commits anzeigen
+            # --------------------------------------------------------
+            for line in lines:
+                log(
+                    f"• {line}",
+                    "info"
+                )
+
+            # --------------------------------------------------------
+            # Erfolg
+            # --------------------------------------------------------
+            loaded_text = TEXTS.get(lang, {}).get(
+                "commits_loaded",
+                "Commits erfolgreich geladen"
+                if is_de
+                else
+                "Commits loaded successfully"
+            )
+
+            log(
+                f"✅ {loaded_text} ({len(lines)})",
+                "success",
+            )
+
+            set_progress(
+                100,
+                "✅ Commits geladen"
+                if is_de
+                else
+                "✅ Commits loaded"
+            )
+
+            play_commit_sound(True)
+
+            finalize_pbar(
+                "✅ Fertig!"
+                if is_de
+                else
+                "✅ Done!",
+                visible_seconds=3
+            )
+
+        # ============================================================
+        # ALLGEMEINER FEHLER
+        # ============================================================
         except Exception as e:
-            log(f"❌ Fehler: {str(e)}", "error")
-            play_commit_sound(False)
-            finalize_pbar(f"❌ Fehler: {str(e)}")
 
+            error_text = str(e)
+
+            log(
+                f"❌ Fehler: {error_text}",
+                "error"
+            )
+
+            set_progress(
+                100,
+                f"❌ Fehler: {error_text}",
+                is_err=True
+            )
+
+            play_commit_sound(False)
+
+        # ============================================================
+        # CLEANUP
+        # ============================================================
         finally:
+
             if temp_dir and os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir)
+
+                try:
+
+                    shutil.rmtree(
+                        temp_dir,
+                        ignore_errors=True
+                    )
+
+                    log(
+                        "🧹 Temporäres Repository gelöscht."
+                        if is_de
+                        else
+                        "🧹 Temporary repository removed.",
+                        "info",
+                    )
+
+                except Exception as cleanup_error:
+
+                    log(
+                        f"⚠ Cleanup-Fehler: {cleanup_error}",
+                        "warning",
+                    )
+
+
 
     # ===================== OSCam-EMU BUTTON WRAPPERS =====================
     
@@ -24390,178 +24936,497 @@ class PatchManagerGUI(QWidget):
 
     def check_for_new_commit(self):
         """
-        Prüft, ob ein neuer Commit im Repository verfügbar ist.
-        UI-Updates, Regenbogen-ProgressBar und Sound werden verwendet.
+        Prüft den aktuellsten Commit von Streamboard.
+
+        Der Netzwerk/Git-Check läuft in einem QThread,
+        damit die PyQt-Oberfläche nicht einfriert.
+
+        Repository:
+            https://git.streamboard.tv/common/oscam.git
+        Branch:
+            master
         """
 
-        # --- Final Label verstecken ---
+        from PyQt6.QtCore import QThread, pyqtSignal
+        from PyQt6.QtWidgets import QMessageBox, QApplication
+        import subprocess
+
+        # ---------------------------------------------------------
+        # Final Label verstecken
+        # ---------------------------------------------------------
         if hasattr(self, "hide_final_label"):
             self.hide_final_label()
-        import requests
-        import re
-        from PyQt6.QtWidgets import QMessageBox, QApplication
-        from PyQt6.QtCore import QTimer
 
-        # --- 1. Sprache & ProgressBar Setup ---
+        # ---------------------------------------------------------
+        # Sprache
+        # ---------------------------------------------------------
         lang = getattr(self, "LANG", "de").lower()
         self.TEXT = globals().get("TEXTS", {}).get(lang, {})
-        is_de = lang == "de"
+        is_de = lang.startswith("de")
 
+        # ---------------------------------------------------------
+        # ProgressBar
+        # ---------------------------------------------------------
         pbar = getattr(self, "progress_bar", None)
 
-        def set_progress(val, text=None):
-            if not pbar:
+        rainbow = (
+            "qlineargradient("
+            "x1:0, y1:0, x2:1, y2:0, "
+            "stop:0 #FF0000, "
+            "stop:0.2 #FF7F00, "
+            "stop:0.4 #FFFF00, "
+            "stop:0.6 #00FF00, "
+            "stop:0.8 #0000FF, "
+            "stop:1 #8B00FF)"
+        )
+
+        def set_progress(value, text=None):
+            if pbar is None:
                 return
-            rainbow = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF0000, stop:0.2 #FF7F00, stop:0.4 #FFFF00, stop:0.6 #00FF00, stop:0.8 #0000FF, stop:1 #8B00FF)"
+
             pbar.setStyleSheet(
                 f"""
                 QProgressBar {{
-                    text-align: center; font-weight: bold; border: 2px solid #222;
-                    border-radius: 6px; background-color: #111; color: black; font-size: 15pt;
+                    text-align: center;
+                    font-weight: bold;
+                    border: 2px solid #222;
+                    border-radius: 6px;
+                    background-color: #111;
+                    color: black;
+                    font-size: 15pt;
                 }}
+
                 QProgressBar::chunk {{
-                    background-color: {rainbow}; border-radius: 4px;
+                    background-color: {rainbow};
+                    border-radius: 4px;
                 }}
                 """
             )
-            pbar.setValue(val)
-            if text:
+
+            pbar.setValue(value)
+
+            if text is not None:
                 pbar.setFormat(text)
+
             pbar.show()
             QApplication.processEvents()
 
         def finalize_pbar(text, visible_seconds=3):
-            if not pbar:
+            if pbar is None:
                 return
-            rainbow = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF0000, stop:0.2 #FF7F00, stop:0.4 #FFFF00, stop:0.6 #00FF00, stop:0.8 #0000FF, stop:1 #8B00FF)"
+
             pbar.setStyleSheet(
                 f"""
                 QProgressBar {{
-                    text-align: center; font-weight: bold; border: 2px solid #222;
-                    border-radius: 6px; background-color: #111; color: black; font-size: 15pt;
+                    text-align: center;
+                    font-weight: bold;
+                    border: 2px solid #222;
+                    border-radius: 6px;
+                    background-color: #111;
+                    color: black;
+                    font-size: 15pt;
                 }}
+
                 QProgressBar::chunk {{
-                    background-color: {rainbow}; border-radius: 4px;
+                    background-color: {rainbow};
+                    border-radius: 4px;
                 }}
                 """
             )
+
             pbar.setValue(100)
             pbar.setFormat(text)
+
+            from PyQt6.QtCore import QTimer
+
+            def clear_bar():
+                if pbar is None:
+                    return
+
+                pbar.setStyleSheet(
+                    """
+                    QProgressBar {
+                        text-align: center;
+                        font-weight: bold;
+                        border: 2px solid #222;
+                        border-radius: 6px;
+                        background-color: #111;
+                        color: black;
+                        font-size: 15pt;
+                    }
+
+                    QProgressBar::chunk {
+                        background-color: transparent;
+                    }
+                    """
+                )
+
+                pbar.setValue(0)
+                pbar.setFormat("")
+
             QTimer.singleShot(
                 visible_seconds * 1000,
-                lambda: pbar.setStyleSheet(
-                    """
-                QProgressBar {
-                    text-align: center; font-weight: bold; border: 2px solid #222;
-                    border-radius: 6px; background-color: #111; color: black; font-size: 15pt;
-                }
-                QProgressBar::chunk {
-                    background-color: transparent;
-                }
-                """
-                ),
+                clear_bar
             )
-            QTimer.singleShot(visible_seconds * 1000, lambda: pbar.setValue(0))
 
-        # -------------------------------
-        # START
-        # -------------------------------
+        # ---------------------------------------------------------
+        # Git Worker
+        # ---------------------------------------------------------
+        class CommitWorker(QThread):
+
+            success = pyqtSignal(str)
+            error = pyqtSignal(str)
+
+            def run(self):
+                try:
+                    repo_url = (
+                        "https://git.streamboard.tv/"
+                        "common/oscam.git"
+                    )
+
+                    result = subprocess.run(
+                        [
+                            "git",
+                            "ls-remote",
+                            repo_url,
+                            "refs/heads/master"
+                        ],
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=20
+                    )
+
+                    if result.returncode != 0:
+                        error_text = (
+                            result.stderr.strip()
+                            or "git ls-remote fehlgeschlagen."
+                        )
+
+                        self.error.emit(error_text)
+                        return
+
+                    output = result.stdout.strip()
+
+                    if not output:
+                        self.error.emit(
+                            "Keine Antwort von Streamboard."
+                        )
+                        return
+
+                    # Erwartet:
+                    # HASH<TAB>refs/heads/master
+                    parts = output.split()
+
+                    if not parts:
+                        self.error.emit(
+                            "Kein Commit-Hash erhalten."
+                        )
+                        return
+
+                    commit_hash = parts[0].strip().lower()
+
+                    # SHA-1 muss 40 Zeichen haben
+                    if len(commit_hash) != 40:
+                        self.error.emit(
+                            f"Ungültiger Commit-Hash: {commit_hash}"
+                        )
+                        return
+
+                    self.success.emit(commit_hash)
+
+                except subprocess.TimeoutExpired:
+                    self.error.emit(
+                        "Zeitüberschreitung bei der Verbindung."
+                    )
+
+                except FileNotFoundError:
+                    self.error.emit(
+                        "Git wurde nicht gefunden. "
+                        "Bitte prüfen, ob Git installiert ist."
+                    )
+
+                except Exception as e:
+                    self.error.emit(str(e))
+
+        # ---------------------------------------------------------
+        # Progress starten
+        # ---------------------------------------------------------
         if pbar:
             set_progress(
-                10, "🔍 Prüfe Streamboard..." if is_de else "Checking Streamboard..."
+                10,
+                "🔍 Prüfe Streamboard..."
+                if is_de
+                else
+                "Checking Streamboard..."
             )
 
-        cyan, end = "<span style='color:cyan;'>", "</span>"
-        mb_title = self.TEXT.get("check_commit_title", "OSCam Commit-Check")
+            set_progress(
+                30,
+                "🌐 Verbinde mit Streamboard..."
+                if is_de
+                else
+                "🌐 Connecting to Streamboard..."
+            )
 
-        try:
-            if pbar:
-                set_progress(30)
-            url = "https://git.streamboard.tv/common/oscam/-/commits/master"
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-            resp = requests.get(url, timeout=10, headers=headers)
-            resp.raise_for_status()
+        # ---------------------------------------------------------
+        # Worker erzeugen
+        # ---------------------------------------------------------
+        worker = CommitWorker(self)
 
-            if pbar:
-                set_progress(60)
+        # Referenz behalten, damit Python den Thread nicht
+        # vorzeitig freigibt.
+        self._commit_check_worker = worker
 
-            # Commit-Hash suchen
-            m = re.search(r'data-commit-id="([a-f0-9]{40})"', resp.text)
-            if not m:
-                m = re.search(r"commit/([a-f0-9]{40})", resp.text)
+        # ---------------------------------------------------------
+        # Erfolgreicher Check
+        # ---------------------------------------------------------
+        def commit_received(newest_hash):
 
-            if not m:
-                safe_play("dialog-error.oga")
-                msg = self.TEXT.get(
-                    "check_commit_no_hash", "Fehler: Kein Commit-Hash gefunden."
-                )
-                self.log_message(f"<span style='color:orange;'>⚠️ {msg}</span>")
-                QMessageBox.warning(self, mb_title, msg)
-                finalize_pbar("❌ Fehler")
-                return
-
-            if pbar:
-                set_progress(85)
-
-            newest_hash = m.group(1)
-            last_known = self.cfg.get("last_stream_commit", "")
-
-            # --- ALLES AKTUELL ---
-            if newest_hash == last_known:
-                safe_play("dialog-information.oga")
-                msg_up = self.TEXT.get(
-                    "check_commit_up_to_date", "Kein neuer Commit vorhanden."
-                )
-                lbl_curr = self.TEXT.get("check_commit_current_hash", "Aktueller Hash:")
-
-                # Log in Info-Box
-                self.log_message(f"{cyan}ℹ️ {msg_up} ({newest_hash[:7]}){end}")
-                QMessageBox.information(
-                    self, mb_title, f"{msg_up}\n\n{lbl_curr} {newest_hash[:8]}"
-                )
-
+            try:
                 if pbar:
-                    # Orange-Chunk für „Alles aktuell“
-                    pbar.setStyleSheet(
-                        """
-                        QProgressBar {
-                            text-align: center; font-weight: bold; border: 2px solid #222;
-                            border-radius: 6px; background-color: #111; color: black; font-size: 15pt;
-                        }
-                        QProgressBar::chunk {
-                            background-color: orange; border-radius: 4px;
-                        }
-                    """
+                    set_progress(75)
+
+                # ---------------------------------------------
+                # Letzten bekannten Commit holen
+                # ---------------------------------------------
+                last_known = str(
+                    self.cfg.get(
+                        "last_stream_commit",
+                        ""
                     )
-                    finalize_pbar(f"✅ {msg_up}", visible_seconds=3)
+                ).strip().lower()
 
-            # --- NEUER COMMIT ---
-            else:
-                safe_play("complete.oga")
-                msg_new = self.TEXT.get(
-                    "check_commit_new_found", "Neuer Commit gefunden!"
+                # ---------------------------------------------
+                # AKTUELL
+                # ---------------------------------------------
+                if newest_hash == last_known:
+
+                    safe_play(
+                        "dialog-information.oga"
+                    )
+
+                    msg_up = self.TEXT.get(
+                        "check_commit_up_to_date",
+                        "Kein neuer Commit vorhanden."
+                    )
+
+                    lbl_curr = self.TEXT.get(
+                        "check_commit_current_hash",
+                        "Aktueller Hash:"
+                    )
+
+                    self.log_message(
+                        "<span style='color:cyan;'>"
+                        f"ℹ️ {msg_up} "
+                        f"({newest_hash[:7]})"
+                        "</span>"
+                    )
+
+                    QMessageBox.information(
+                        self,
+                        self.TEXT.get(
+                            "check_commit_title",
+                            "OSCam Commit-Check"
+                        ),
+                        (
+                            f"{msg_up}\n\n"
+                            f"{lbl_curr} "
+                            f"{newest_hash[:8]}"
+                        )
+                    )
+
+                    if pbar:
+                        pbar.setStyleSheet(
+                            """
+                            QProgressBar {
+                                text-align: center;
+                                font-weight: bold;
+                                border: 2px solid #222;
+                                border-radius: 6px;
+                                background-color: #111;
+                                color: black;
+                                font-size: 15pt;
+                            }
+
+                            QProgressBar::chunk {
+                                background-color: orange;
+                                border-radius: 4px;
+                            }
+                            """
+                        )
+
+                        finalize_pbar(
+                            f"✅ {msg_up}",
+                            3
+                        )
+
+                # ---------------------------------------------
+                # NEUER COMMIT
+                # ---------------------------------------------
+                else:
+
+                    safe_play(
+                        "complete.oga"
+                    )
+
+                    msg_new = self.TEXT.get(
+                        "check_commit_new_found",
+                        "Neuer Commit gefunden!"
+                    )
+
+                    lbl_new = self.TEXT.get(
+                        "check_commit_new_hash",
+                        "Neu:"
+                    )
+
+                    lbl_old = self.TEXT.get(
+                        "check_commit_old_hash",
+                        "Alt:"
+                    )
+
+                    self.log_message(
+                        "<span style='color:cyan;'>"
+                        f"🆕 {msg_new} "
+                        f"({newest_hash[:7]})"
+                        "</span>"
+                    )
+
+                    old_hash = (
+                        last_known[:8]
+                        if last_known
+                        else "---"
+                    )
+
+                    info_text = (
+                        f"{msg_new}\n\n"
+                        f"{lbl_new} {newest_hash[:8]}\n"
+                        f"{lbl_old} {old_hash}"
+                    )
+
+                    QMessageBox.information(
+                        self,
+                        self.TEXT.get(
+                            "check_commit_title",
+                            "OSCam Commit-Check"
+                        ),
+                        info_text
+                    )
+
+                    # -----------------------------------------
+                    # Commit speichern
+                    # -----------------------------------------
+                    self.cfg[
+                        "last_stream_commit"
+                    ] = newest_hash
+
+                    save_config_func = globals().get(
+                        "save_config"
+                    )
+
+                    if save_config_func:
+                        save_config_func(
+                            self.cfg,
+                            gui_instance=self,
+                            silent=True
+                        )
+
+                    if pbar:
+                        finalize_pbar(
+                            f"🆕 {msg_new}",
+                            3
+                        )
+
+            except Exception as e:
+
+                safe_play(
+                    "dialog-error.oga"
                 )
-                lbl_new = self.TEXT.get("check_commit_new_hash", "Neu:")
-                lbl_old = self.TEXT.get("check_commit_old_hash", "Alt:")
-                self.log_message(f"{cyan}🆕 {msg_new} ({newest_hash[:7]}){end}")
-                info_text = f"{msg_new}\n\n{lbl_new} {newest_hash[:8]}\n{lbl_old} {last_known[:8] if last_known else '---'}"
-                QMessageBox.information(self, mb_title, info_text)
 
-                # Speichern
-                self.cfg["last_stream_commit"] = newest_hash
-                if "save_config" in globals():
-                    globals()["save_config"](self.cfg, gui_instance=self, silent=True)
+                error_text = str(e)
+
+                self.log_message(
+                    "<span style='color:red;'>"
+                    f"❌ {error_text}"
+                    "</span>"
+                )
+
+                QMessageBox.critical(
+                    self,
+                    self.TEXT.get(
+                        "check_commit_title",
+                        "OSCam Commit-Check"
+                    ),
+                    error_text
+                )
 
                 if pbar:
-                    finalize_pbar(f"🆕 {msg_new}")
+                    finalize_pbar(
+                        "❌ Fehler"
+                    )
 
-        except Exception as e:
-            safe_play("dialog-error.oga")
-            err_lbl = self.TEXT.get("check_commit_error", "Fehler beim Check:")
-            self.log_message(f"<span style='color:red;'>❌ {err_lbl} {str(e)}</span>")
-            QMessageBox.critical(self, mb_title, f"{err_lbl}\n{str(e)}")
+        # ---------------------------------------------------------
+        # Fehler vom Worker
+        # ---------------------------------------------------------
+        def commit_error(error_text):
+
+            safe_play(
+                "dialog-error.oga"
+            )
+
+            err_lbl = self.TEXT.get(
+                "check_commit_error",
+                "Fehler beim Check:"
+            )
+
+            self.log_message(
+                "<span style='color:red;'>"
+                f"❌ {err_lbl} {error_text}"
+                "</span>"
+            )
+
+            QMessageBox.critical(
+                self,
+                self.TEXT.get(
+                    "check_commit_title",
+                    "OSCam Commit-Check"
+                ),
+                f"{err_lbl}\n{error_text}"
+            )
+
             if pbar:
-                finalize_pbar(f"❌ Fehler: {str(e)}")
+                finalize_pbar(
+                    "❌ Fehler"
+                )
+
+        # ---------------------------------------------------------
+        # Signale verbinden
+        # ---------------------------------------------------------
+        worker.success.connect(
+            commit_received
+        )
+
+        worker.error.connect(
+            commit_error
+        )
+
+        # ---------------------------------------------------------
+        # Thread nach Ende aufräumen
+        # ---------------------------------------------------------
+        def worker_finished():
+            self._commit_check_worker = None
+
+        worker.finished.connect(
+            worker_finished
+        )
+
+        # ---------------------------------------------------------
+        # Start
+        # ---------------------------------------------------------
+        worker.start()
+
+
 
     def on_clean_emu_clicked(self):
         """Sorgt dafür, dass das Log vor der Bereinigung englisch wird."""
