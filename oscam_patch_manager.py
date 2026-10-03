@@ -860,7 +860,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "7.2.5"
+APP_VERSION = "7.2.6"
 # ===================== PATCH DIRS =====================
 def get_best_patch_dir():
     """Bestimmt den besten Patch-Ordner (S3, lokal, Home)."""
@@ -5797,7 +5797,7 @@ class CinematicMatrixSplash(QWidget):
             r" █  |_|   |_||__| |__||_|  |__||__| |__||_______||_______||___|  |_|      █ ",
             r" █                                                                        █ ",
             r" █──────────────────[ SYSTEM: NEURAL_LINK OPERATIONAL ]───────────────────█ ",
-            r" █                   >> OSCAM EMU PATCH MANAGER v7.2.5   <<               █ ",
+            r" █                   >> OSCAM EMU PATCH MANAGER v7.2.6  <<               █ ",
             r" █             >> CODENAME: Speedy_Oscam-_Patch_Manager 2026 <<           █ ",
             r" ◥◣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◢◤ "
         ]
@@ -6903,6 +6903,7 @@ def ensure_git_repository(
     remote_url,
     description="Repository",
     clone_timeout=1200,
+    depth=None,
 ):
     """
     Stellt sicher, dass repo_dir ein gültiges Git-Repository ist.
@@ -6914,13 +6915,24 @@ def ensure_git_repository(
       - vorhandener Nicht-Git-Ordner mit Inhalt -> NICHT löschen,
         sondern verständlichen Fehler melden
 
+    depth:
+      - None -> vollständiger Clone ohne --depth
+      - positive Zahl -> Clone mit --depth <Zahl>
+
     Es wird bewusst niemals shell=True verwendet. Damit ist der Ablauf
     auf Linux und Windows 11 identisch.
     """
     if not repo_dir:
         raise RuntimeError(f"{description}: Repository-Pfad fehlt.")
 
-    repo_dir = os.path.abspath(os.path.expanduser(os.path.expandvars(str(repo_dir))))
+    repo_dir = os.path.abspath(
+        os.path.expanduser(
+            os.path.expandvars(
+                str(repo_dir)
+            )
+        )
+    )
+
     parent = os.path.dirname(repo_dir) or os.getcwd()
 
     # Bereits vorhandenes Repository
@@ -6933,41 +6945,72 @@ def ensure_git_repository(
                 timeout=60,
             )
             return repo_dir
+
         except Exception:
             try:
                 has_entries = any(os.scandir(repo_dir))
             except OSError as exc:
                 raise RuntimeError(
-                    f"{description}: Verzeichnis kann nicht gelesen werden:\n{repo_dir}\n\n{exc}"
+                    f"{description}: Verzeichnis kann nicht gelesen werden:\n"
+                    f"{repo_dir}\n\n"
+                    f"{exc}"
                 ) from exc
 
             if has_entries:
                 raise RuntimeError(
                     f"{description}: Der Zielordner existiert bereits, "
-                    f"ist aber kein Git-Repository:\n\n{repo_dir}\n\n"
+                    f"ist aber kein Git-Repository:\n\n"
+                    f"{repo_dir}\n\n"
                     "Bitte den Ordner in der GUI-Konfiguration ändern "
                     "oder den Inhalt sichern und entfernen."
                 )
 
     elif os.path.exists(repo_dir):
         raise RuntimeError(
-            f"{description}: Der Repository-Pfad ist keine Verzeichnis:\n\n{repo_dir}"
+            f"{description}: Der Repository-Pfad ist kein Verzeichnis:\n\n"
+            f"{repo_dir}"
         )
 
     os.makedirs(parent, exist_ok=True)
 
-    # Git clone erzeugt repo_dir selbst bzw. füllt ein leeres Verzeichnis.
+    # Git Clone vorbereiten
+    command = [
+        find_git_executable(),
+        "clone",
+    ]
+
+    # --depth N nur verwenden, wenn ausdrücklich eine
+    # positive Tiefe angegeben wurde.
+    if depth is not None:
+        try:
+            depth_value = int(depth)
+        except (TypeError, ValueError):
+            depth_value = None
+
+        if depth_value is not None and depth_value > 0:
+            command.extend([
+                "--depth",
+                str(depth_value),
+            ])
+
+    command.extend([
+        remote_url,
+        repo_dir,
+    ])
+
     print(
         f"[GIT] {description} fehlt – klone Repository:\n"
         f"      {remote_url}\n"
-        f"      -> {repo_dir}",
+        f"      -> {repo_dir}\n"
+        f"      Clone-Tiefe: "
+        f"{depth if depth is not None else 'vollständig'}",
         flush=True,
     )
 
     run = subprocess.run
-    git_executable = find_git_executable()
+
     result = run(
-        [git_executable, "clone", "--depth", "1", remote_url, repo_dir],
+        command,
         cwd=parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -6980,7 +7023,12 @@ def ensure_git_repository(
     )
 
     if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()
+        detail = (
+            result.stderr
+            or result.stdout
+            or ""
+        ).strip()
+
         raise RuntimeError(
             f"{description}: Git-Clone fehlgeschlagen.\n\n"
             f"Repository:\n{remote_url}\n\n"
@@ -7000,6 +7048,7 @@ def ensure_git_repository(
         f"[GIT] {description} erfolgreich geklont: {repo_dir}",
         flush=True,
     )
+
     return repo_dir
 
 # ===================== PATCH FUNCTIONS =====================
@@ -7008,28 +7057,6 @@ def create_patch(
     info_widget=None,
     progress_callback=None
 ):
-    """
-    Erstellt einen OSCam-Emu Git-Patch.
-
-    Fortschritt:
-        0   = Start
-        5   = Git erkannt
-        10  = Streamboard vorbereitet
-        25  = Streamboard aktualisiert
-        40  = OSCam-Emu aktualisiert
-        50  = Streamboard-Commit übernommen
-        65  = Git-Diff erstellt
-        80  = Patch validiert
-        90  = Patch-Header eingefügt
-        100 = Patch erstellt
-
-    Der Fortschritt wird numerisch an progress_callback
-    übergeben.
-
-    Der Fortschrittstext wird direkt über
-    QProgressBar.setFormat() angezeigt.
-    """
-
     import os
     import shutil
     import subprocess
@@ -7046,101 +7073,73 @@ def create_patch(
         QApplication = None
 
     # ============================================================
-    # SPRACHE
+    # Sprache
     # ============================================================
 
-    current_lang = "de"
+    current_lang = getattr(
+        gui_instance,
+        "LANG",
+        "de"
+    )
 
-    try:
-        current_lang = getattr(
-            gui_instance,
-            "LANG",
-            "de"
-        )
+    current_lang = str(
+        current_lang
+    ).lower()[:2]
 
-        if not current_lang:
-            current_lang = "de"
-
-        current_lang = str(
-            current_lang
-        ).lower().strip()
-
-    except Exception:
-        current_lang = "de"
-
-    if current_lang not in ("de", "en"):
-        current_lang = "de"
+    is_de = current_lang == "de"
 
     # ============================================================
-    # TEXT AUS TEXTS
+    # Übersetzungen
     # ============================================================
 
-    def tr(
-        key,
-        german,
-        english=None
-    ):
-        """
-        Holt einen Text aus TEXTS.
-
-        Bestehendes Schema:
-
-            TEXTS["de"]["check_commit_button"]
-            TEXTS["en"]["check_commit_button"]
-
-        Falls der Schlüssel fehlt, wird der
-        angegebene Fallback verwendet.
-        """
-
-        if english is None:
-            english = german
-
+    def tr(key, fallback_de, fallback_en):
         try:
-
-            language_dict = TEXTS.get(
-                current_lang,
+            texts = globals().get(
+                "TEXTS",
                 {}
             )
 
-            if isinstance(
-                language_dict,
-                dict
-            ):
+            if isinstance(texts, dict):
 
-                value = language_dict.get(
+                value = texts.get(
                     key
                 )
 
-                if value:
+                if isinstance(value, dict):
+
+                    value = value.get(
+                        current_lang
+                    )
+
+                    if value:
+                        return str(value)
+
+                elif value:
                     return str(value)
 
         except Exception:
             pass
 
-        if current_lang == "en":
-            return str(english)
-
-        return str(german)
+        return (
+            fallback_de
+            if is_de
+            else fallback_en
+        )
 
     # ============================================================
-    # PROGRESSBAR
+    # Progress-Bar ermitteln
     # ============================================================
 
     def get_progress_bar():
-        """
-        Sucht die vorhandene QProgressBar.
-        """
 
         if gui_instance is None:
             return None
 
-        possible_names = (
+        for name in (
             "progress_bar",
             "progressbar",
-            "progressBar",
-        )
-
-        for name in possible_names:
+            "progressBar"
+        ):
 
             try:
 
@@ -7151,24 +7150,21 @@ def create_patch(
                 )
 
                 if widget is not None:
-
-                    if hasattr(
-                        widget,
-                        "setValue"
-                    ):
-
-                        return widget
+                    return widget
 
             except Exception:
                 pass
 
         return None
 
+    progress_bar = get_progress_bar()
+
     # ============================================================
-    # GUI AKTUALISIEREN
+    # GUI Events
     # ============================================================
 
     def process_events():
+
         try:
 
             if QApplication is not None:
@@ -7178,237 +7174,112 @@ def create_patch(
             pass
 
     # ============================================================
-    # PROGRESS SETZEN
+    # Progress
     # ============================================================
 
     def set_progress(
         value=None,
         text=None
     ):
-        """
-        Setzt den Fortschritt.
-
-        Der Text wird direkt über setFormat()
-        in der QProgressBar angezeigt.
-
-        Wichtig:
-        Dadurch wird auch ein alter Text wie
-        "Patch-Ordner vollständig geleert"
-        zuverlässig überschrieben.
-        """
-
-        progress_bar = None
 
         try:
 
-            progress_bar = get_progress_bar()
+            if value is not None:
 
-        except Exception:
-            progress_bar = None
-
-        # --------------------------------------------------------
-        # Aktuellen Wert verwenden, wenn value=None
-        # --------------------------------------------------------
-
-        if value is None:
-
-            if progress_bar is not None:
-
-                try:
-                    value = progress_bar.value()
-                except Exception:
-                    value = 0
-
-            else:
-
-                value = 0
-
-        # --------------------------------------------------------
-        # Wert begrenzen
-        # --------------------------------------------------------
-
-        try:
-
-            value = int(
-                max(
+                value = max(
                     0,
                     min(
                         100,
-                        value
+                        int(value)
                     )
                 )
-            )
 
-        except Exception:
+                if progress_bar is not None:
 
-            value = 0
-
-        # --------------------------------------------------------
-        # QProgressBar
-        # --------------------------------------------------------
-
-        if progress_bar is not None:
-
-            try:
-
-                progress_bar.setValue(
-                    value
-                )
-
-            except Exception as error:
-
-                print(
-                    "ProgressBar-Wert konnte "
-                    "nicht gesetzt werden:",
-                    error,
-                    flush=True
-                )
-
-            # ----------------------------------------------------
-            # TEXT DIREKT IN DER PROGRESSBAR
-            # ----------------------------------------------------
+                    progress_bar.setValue(
+                        value
+                    )
 
             if text is not None:
 
-                try:
+                if progress_bar is not None:
 
                     progress_bar.setFormat(
                         str(text)
                     )
 
-                except Exception as error:
+            if progress_bar is not None:
 
-                    print(
-                        "ProgressBar-Text konnte "
-                        "nicht gesetzt werden:",
-                        error,
-                        flush=True
-                    )
-
-            try:
                 progress_bar.show()
-            except Exception:
-                pass
-
-        # --------------------------------------------------------
-        # Externer Callback
-        # --------------------------------------------------------
-
-        if progress_callback is not None:
-
-            try:
-
-                progress_callback(
-                    value
-                )
-
-            except Exception as error:
-
-                print(
-                    "Progress-Callback-Fehler:",
-                    error,
-                    flush=True
-                )
-
-        process_events()
-
-    # ============================================================
-    # LOG
-    # ============================================================
-
-    def log(
-        message="",
-        progress=None,
-        progress_text=None
-    ):
-        """
-        Schreibt eine Meldung in das Info-Widget.
-
-        Optional kann gleichzeitig der Fortschritt
-        gesetzt werden.
-        """
-
-        text = str(
-            message
-        )
-
-        # --------------------------------------------------------
-        # INFO-WIDGET
-        # --------------------------------------------------------
-
-        try:
-
-            if info_widget is not None:
-
-                if hasattr(
-                    info_widget,
-                    "append"
-                ):
-
-                    info_widget.append(
-                        text
-                    )
-
-                elif hasattr(
-                    info_widget,
-                    "setText"
-                ):
-
-                    old_text = ""
-
-                    try:
-
-                        old_text = (
-                            info_widget.text()
-                        )
-
-                    except Exception:
-                        pass
-
-                    if old_text:
-
-                        info_widget.setText(
-                            old_text
-                            + "\n"
-                            + text
-                        )
-
-                    else:
-
-                        info_widget.setText(
-                            text
-                        )
 
         except Exception:
             pass
 
-        # --------------------------------------------------------
-        # PROGRESS
-        # --------------------------------------------------------
+        try:
 
-        if progress is not None:
+            if progress_callback is not None:
 
-            set_progress(
-                progress,
-                progress_text
-            )
+                if value is not None:
+                    progress_callback(
+                        value
+                    )
 
-        elif progress_text is not None:
+                elif text is not None:
+                    try:
+                        progress_callback(
+                            None,
+                            text
+                        )
+                    except TypeError:
+                        pass
 
-            set_progress(
-                None,
-                progress_text
-            )
-
-        print(
-            text,
-            flush=True
-        )
+        except Exception:
+            pass
 
         process_events()
 
     # ============================================================
-    # GIT
+    # Logging
+    # ============================================================
+
+    def log(message):
+
+        try:
+            print(
+                str(message)
+            )
+        except Exception:
+            pass
+
+        try:
+
+            if gui_instance is not None:
+
+                append_info = getattr(
+                    gui_instance,
+                    "append_info",
+                    None
+                )
+
+                if callable(
+                    append_info
+                ):
+
+                    append_info(
+                        getattr(
+                            gui_instance,
+                            "info_text",
+                            info_widget
+                        ),
+                        str(message),
+                        "info"
+                    )
+
+        except Exception:
+            pass
+
+    # ============================================================
+    # Git Wrapper
     # ============================================================
 
     def run_git(
@@ -7417,117 +7288,65 @@ def create_patch(
         check=True,
         timeout=1200
     ):
-        """
-        Führt einen Git-Befehl aus.
 
-        Rückgabe:
-
-            (returncode, stdout, stderr)
-        """
-
-        git_executable = (
-            find_git_executable()
-        )
+        git_executable = find_git_executable()
 
         command = [
             git_executable
         ] + list(args)
 
-        try:
-
-            result = subprocess.run(
-                command,
-                cwd=cwd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                shell=False,
-                timeout=timeout
-            )
-
-        except FileNotFoundError as exc:
-
-            raise RuntimeError(
-                "Git konnte nicht gestartet werden.\n\n"
-                f"Git-Pfad:\n{git_executable}"
-            ) from exc
-
-        except subprocess.TimeoutExpired as exc:
-
-            raise RuntimeError(
-                "Der Git-Befehl wurde wegen eines "
-                "Timeouts abgebrochen.\n\n"
-                + " ".join(command)
-            ) from exc
-
-        except OSError as exc:
-
-            raise RuntimeError(
-                "Fehler beim Starten von Git:\n\n"
-                f"{exc}"
-            ) from exc
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout
+        )
 
         stdout = (
-            result.stdout
-            or ""
-        )
+            result.stdout or ""
+        ).strip()
 
         stderr = (
-            result.stderr
-            or ""
-        )
+            result.stderr or ""
+        ).strip()
 
-        if (
-            check
-            and result.returncode != 0
-        ):
+        if check and result.returncode != 0:
 
-            error_text = (
-                stderr.strip()
-                or stdout.strip()
-                or
-                f"Git Returncode: "
-                f"{result.returncode}"
+            detail = (
+                stderr
+                or stdout
+                or (
+                    "Git-Befehl fehlgeschlagen"
+                    if is_de
+                    else
+                    "Git command failed"
+                )
             )
 
             raise RuntimeError(
-                "Git-Befehl fehlgeschlagen:\n\n"
-                + " ".join(command)
-                + "\n\n"
-                + error_text
+                "git "
+                + " ".join(
+                    str(x)
+                    for x in args
+                )
+                + "\n"
+                + detail
             )
 
-        return (
-            result.returncode,
-            stdout,
-            stderr
-        )
+        return stdout
 
     # ============================================================
-    # GIT-REPOSITORY PRÜFEN
+    # Repository validieren
     # ============================================================
 
     def validate_git_repository(
         repo_dir,
         description
     ):
-        """
-        Prüft, ob ein Verzeichnis ein Git-Repository ist.
-        """
-
-        if not repo_dir:
-
-            raise RuntimeError(
-                f"{description}: "
-                "Repository-Pfad fehlt."
-            )
-
-        repo_dir = os.path.abspath(
-            repo_dir
-        )
 
         if not os.path.isdir(
             repo_dir
@@ -7535,147 +7354,79 @@ def create_patch(
 
             raise RuntimeError(
                 f"{description}: "
-                "Repository-Verzeichnis "
-                f"existiert nicht:\n\n"
-                f"{repo_dir}"
+                "Repository-Verzeichnis fehlt."
             )
 
-        # Nicht auf ".git" als Verzeichnis bestehen: Git-Worktrees
-        # verwenden beispielsweise eine .git-Datei.
-        run_git(
+        result = run_git(
             [
                 "rev-parse",
                 "--is-inside-work-tree"
             ],
             cwd=repo_dir,
-            check=True
+            check=False,
+            timeout=60
         )
 
-        return repo_dir
+        if result.strip().lower() != "true":
+
+            raise RuntimeError(
+                f"{description}: "
+                "kein gültiges Git-Repository."
+            )
 
     # ============================================================
-    # HEAD
+    # HEAD ermitteln
     # ============================================================
 
-    def get_head(
-        repo_dir
-    ):
-        """
-        Liefert den aktuellen HEAD.
-        """
+    def get_head(repo_dir):
 
-        rc, stdout, stderr = run_git(
+        return run_git(
             [
                 "rev-parse",
                 "HEAD"
             ],
             cwd=repo_dir,
-            check=True
-        )
-
-        commit = stdout.strip()
-
-        if not commit:
-
-            raise RuntimeError(
-                "Git-HEAD konnte nicht "
-                "ermittelt werden:\n"
-                f"{repo_dir}"
-            )
-
-        return commit
+            check=True,
+            timeout=60
+        ).strip()
 
     # ============================================================
-    # BRANCH
+    # Remote-Branch ermitteln
     # ============================================================
 
-    def get_remote_branch(
-        repo_dir
-    ):
-        """
-        Ermittelt den aktuell ausgecheckten Branch.
+    def get_remote_branch(repo_dir):
 
-        Detached HEAD:
-            HEAD
-        """
-
-        rc, stdout, stderr = run_git(
+        branch = run_git(
             [
                 "symbolic-ref",
                 "--short",
-                "-q",
                 "HEAD"
             ],
             cwd=repo_dir,
-            check=False
-        )
-
-        branch = stdout.strip()
+            check=False,
+            timeout=60
+        ).strip()
 
         if branch:
-            return branch
+            return (
+                "origin/"
+                + branch
+            )
 
-        return "HEAD"
+        return ""
 
     # ============================================================
-    # REPOSITORY AKTUALISIEREN
+    # Repository aktualisieren
     # ============================================================
 
     def update_repository(
         repo_dir,
         description
     ):
-        """
-        Aktualisiert ein bestehendes Git-Repository.
-        """
-
-        branch = get_remote_branch(
-            repo_dir
-        )
 
         log(
-            f"✓ {description}-Branch: "
-            f"{branch}"
+            f"[GIT] Aktualisiere {description}..."
         )
-
-        log(
-            f"🔄 {description}-Fetch..."
-        )
-
-        # --------------------------------------------------------
-        # DETACHED HEAD
-        # --------------------------------------------------------
-
-        if branch == "HEAD":
-
-            run_git(
-                [
-                    "fetch",
-                    "--all",
-                    "--prune"
-                ],
-                cwd=repo_dir,
-                check=True
-            )
-
-            commit = get_head(
-                repo_dir
-            )
-
-            log(
-                f"✓ Aktueller "
-                f"{description}-HEAD:"
-            )
-
-            log(
-                f"  {commit}"
-            )
-
-            return commit
-
-        # --------------------------------------------------------
-        # NORMALER BRANCH
-        # --------------------------------------------------------
 
         run_git(
             [
@@ -7684,1507 +7435,1296 @@ def create_patch(
                 "--prune"
             ],
             cwd=repo_dir,
-            check=True
+            check=True,
+            timeout=1200
         )
 
-        remote_ref = (
-            f"refs/remotes/origin/{branch}"
-        )
-
-        rc, stdout, stderr = run_git(
-            [
-                "show-ref",
-                "--verify",
-                remote_ref
-            ],
-            cwd=repo_dir,
-            check=False
-        )
-
-        if rc == 0:
-
-            log(
-                f"🔄 Aktualisiere lokalen "
-                f"Branch '{branch}' "
-                f"auf origin/{branch}..."
+        remote_branch = (
+            get_remote_branch(
+                repo_dir
             )
+        )
 
-            run_git(
+        if remote_branch:
+
+            remote_exists = run_git(
                 [
-                    "reset",
-                    "--hard",
-                    f"origin/{branch}"
+                    "rev-parse",
+                    "--verify",
+                    remote_branch
                 ],
                 cwd=repo_dir,
-                check=True
+                check=False,
+                timeout=60
             )
 
-            log(
-                f"✓ {description}-Branch "
-                f"'{branch}' aktualisiert."
-            )
+            if remote_exists:
 
-        else:
-
-            log(
-                f"⚠️ Kein Remote-Branch "
-                f"origin/{branch} gefunden."
-            )
-
-            log(
-                "⚠️ Lokaler Branch wird "
-                "unverändert verwendet."
-            )
-
-        commit = get_head(
-            repo_dir
-        )
-
-        log(
-            f"✓ Aktueller "
-            f"{description}-HEAD:"
-        )
-
-        log(
-            f"  {commit}"
-        )
-
-        return commit
-
-    # ============================================================
-    # BINARY GIT DIFF
-    # ============================================================
-
-    def create_binary_git_diff(
-        repo_dir,
-        base_commit,
-        target_commit,
-        output_file
-    ):
-        """
-        Erstellt den vollständigen Git-Diff.
-        """
-
-        if not base_commit:
-
-            raise RuntimeError(
-                "Basis-Commit für Git-Diff fehlt."
-            )
-
-        if not target_commit:
-
-            raise RuntimeError(
-                "Ziel-Commit für Git-Diff fehlt."
-            )
-
-        log(
-            "🧩 Erzeuge finalen Git-Diff..."
-        )
-
-        log(
-            f"  Basis: {base_commit}"
-        )
-
-        log(
-            f"  Ziel : {target_commit}"
-        )
-
-        git_executable = (
-            find_git_executable()
-        )
-
-        command = [
-            git_executable,
-            "diff",
-            "--binary",
-            "--full-index",
-            "--find-renames",
-            "--find-copies",
-            base_commit,
-            target_commit,
-            "--",
-            ".",
-            ":(exclude).github/**",
-            ":(exclude).gitlab/**",
-        ]
-
-        try:
-
-            with open(
-                output_file,
-                "w",
-                encoding="utf-8",
-                errors="replace",
-                newline=""
-            ) as patch_handle:
-
-                result = subprocess.run(
-                    command,
-                    cwd=repo_dir,
-                    stdout=patch_handle,
-                    stderr=subprocess.PIPE,
-                    stdin=subprocess.DEVNULL,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    shell=False,
-                    timeout=1200
+                log(
+                    f"[GIT] {description}: "
+                    f"aktualisiere auf "
+                    f"{remote_branch}"
                 )
-
-        except subprocess.TimeoutExpired as exc:
-
-            raise RuntimeError(
-                "Die Erstellung des Git-Diffs "
-                "wurde wegen eines Timeouts "
-                "abgebrochen."
-            ) from exc
-
-        except OSError as exc:
-
-            raise RuntimeError(
-                "Patch-Datei konnte nicht "
-                "geschrieben werden:\n\n"
-                f"{output_file}\n\n"
-                f"{exc}"
-            ) from exc
-
-        if result.returncode != 0:
-
-            stderr = (
-                result.stderr
-                or ""
-            ).strip()
-
-            raise RuntimeError(
-                "Git-Diff fehlgeschlagen:\n\n"
-                + " ".join(command)
-                + "\n\n"
-                + (
-                    stderr
-                    or
-                    f"Git Returncode: "
-                    f"{result.returncode}"
-                )
-            )
-
-        if not os.path.isfile(
-            output_file
-        ):
-
-            raise RuntimeError(
-                "Git-Diff wurde nicht erzeugt."
-            )
-
-        patch_size = os.path.getsize(
-            output_file
-        )
-
-        if patch_size <= 0:
-
-            raise RuntimeError(
-                "Git-Diff ist leer.\n\n"
-                "Zwischen den angegebenen "
-                "Trees wurden keine Änderungen "
-                "gefunden."
-            )
-
-        log("")
-
-        log(
-            "✓ Git-Diff erfolgreich erzeugt."
-        )
-
-        log(
-            f"✓ Patch-Größe: "
-            f"{patch_size:,} Bytes"
-            .replace(",", ".")
-        )
-
-        return patch_size
-
-    # ============================================================
-    # PATCH VALIDIEREN
-    # ============================================================
-
-    def validate_patch(
-        streamboard_repo,
-        streamboard_commit,
-        patch_file,
-        emu_repo=None,
-        emu_commit=None,
-    ):
-        """
-        Validiert den Patch in zwei Stufen:
-
-        1. `git apply --check` gegen den exakten Streamboard-Commit.
-        2. Tatsächliches Anwenden in einem temporären Git-Worktree und
-           exakter Tree-Vergleich mit dem erwarteten OSCam-Emu-Commit.
-
-        Dadurch kann der Generator keinen Patch als erfolgreich melden,
-        wenn er zwar syntaktisch anwendbar ist, aber nicht exakt den
-        gewünschten EMU-Tree erzeugt.
-        """
-        import shutil
-        import tempfile
-
-        log("")
-        log("════════════════════════════════════════════")
-        log("       PATCH VOLLSTÄNDIG VALIDIEREN")
-        log("════════════════════════════════════════════")
-        log("")
-        log("🔍 Prüfe Patch gegen den exakten Streamboard-Stand...")
-        log(f"   Repository: {streamboard_repo}")
-        log(f"   Base      : {streamboard_commit}")
-        if emu_commit:
-            log(f"   Target    : {emu_commit}")
-
-        validate_git_repository(streamboard_repo, "Streamboard")
-
-        if not os.path.isfile(patch_file):
-            raise RuntimeError(
-                "Patch-Datei für die Validierung wurde nicht gefunden:\n\n"
-                f"{patch_file}"
-            )
-
-        git_executable = find_git_executable()
-
-        # --------------------------------------------------------
-        # 1) Schneller Check gegen den echten Base-Stand
-        # --------------------------------------------------------
-        command = [
-            git_executable,
-            "apply",
-            "--check",
-            "--binary",
-            patch_file,
-        ]
-
-        try:
-            result = subprocess.run(
-                command,
-                cwd=streamboard_repo,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                shell=False,
-                timeout=1200,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(
-                "Die Patch-Validierung wurde wegen eines Timeouts abgebrochen."
-            ) from exc
-        except OSError as exc:
-            raise RuntimeError(
-                "Git konnte für die Patch-Validierung nicht gestartet werden:\n\n"
-                f"{exc}"
-            ) from exc
-
-        stdout = (result.stdout or "").strip()
-        stderr = (result.stderr or "").strip()
-
-        if result.returncode != 0:
-            raise RuntimeError(
-                "Der erzeugte Patch kann nicht auf den exakten "
-                "Streamboard-Stand angewendet werden.\n\n"
-                f"{stderr or stdout or f'git apply --check Returncode: {result.returncode}'}"
-            )
-
-        log("✓ Syntax-/Konfliktprüfung erfolgreich.")
-
-        # Ohne Ziel-Repository kann nur die Anwendbarkeit geprüft werden.
-        if not emu_repo or not emu_commit:
-            log("✓ Kein EMU-Ziel angegeben – exakter Tree-Vergleich entfällt.")
-            return
-
-        validate_git_repository(emu_repo, "OSCam-Emu")
-
-        # --------------------------------------------------------
-        # 2) Patch wirklich anwenden und Tree exakt vergleichen
-        # --------------------------------------------------------
-        worktree = tempfile.mkdtemp(
-            prefix="oscam_patch_validate_",
-            dir=os.path.dirname(os.path.abspath(patch_file)) or None,
-        )
-        worktree_added = False
-
-        try:
-            log("")
-            log("🧪 Wende Patch in sauberem temporären Worktree an...")
-
-            add_result = subprocess.run(
-                [
-                    git_executable,
-                    "worktree",
-                    "add",
-                    "--detach",
-                    "--force",
-                    worktree,
-                    streamboard_commit,
-                ],
-                cwd=emu_repo,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                shell=False,
-                timeout=1200,
-            )
-
-            if add_result.returncode != 0:
-                detail = (add_result.stderr or add_result.stdout or "").strip()
-                raise RuntimeError(
-                    "Temporärer Git-Worktree konnte nicht erstellt werden.\n\n"
-                    f"{detail or f'Git Returncode: {add_result.returncode}'}"
-                )
-
-            worktree_added = True
-
-            apply_result = subprocess.run(
-                [
-                    git_executable,
-                    "apply",
-                    "--binary",
-                    patch_file,
-                ],
-                cwd=worktree,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                shell=False,
-                timeout=1200,
-            )
-
-            if apply_result.returncode != 0:
-                detail = (apply_result.stderr or apply_result.stdout or "").strip()
-                raise RuntimeError(
-                    "Der Patch konnte im sauberen Streamboard-Worktree "
-                    "nicht tatsächlich angewendet werden.\n\n"
-                    f"{detail or f'git apply Returncode: {apply_result.returncode}'}"
-                )
-
-            # Den resultierenden Worktree exakt als Index abbilden und
-            # dessen Tree-Hash mit dem erwarteten EMU-Tree vergleichen.
-            add_result = subprocess.run(
-                [git_executable, "add", "-A"],
-                cwd=worktree,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                shell=False,
-                timeout=1200,
-            )
-
-            if add_result.returncode != 0:
-                detail = (add_result.stderr or add_result.stdout or "").strip()
-                raise RuntimeError(
-                    "Der angewendete Patch konnte nicht vollständig "
-                    "für den Tree-Vergleich erfasst werden.\n\n"
-                    f"{detail or f'git add Returncode: {add_result.returncode}'}"
-                )
-
-            tree_result = subprocess.run(
-                [git_executable, "write-tree"],
-                cwd=worktree,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                shell=False,
-                timeout=1200,
-            )
-
-            if tree_result.returncode != 0:
-                detail = (tree_result.stderr or tree_result.stdout or "").strip()
-                raise RuntimeError(
-                    "Der resultierende Git-Tree konnte nicht erzeugt werden.\n\n"
-                    f"{detail or f'git write-tree Returncode: {tree_result.returncode}'}"
-                )
-
-            actual_tree = tree_result.stdout.strip()
-
-            # Der offizielle OSCam-Emu-Patch-Workflow erzeugt den
-            # Patch OHNE .github und .gitlab. Deshalb darf der
-            # abschließende Vergleich diese Verzeichnisse ebenfalls
-            # nicht berücksichtigen.
-            compare_args = [
-                git_executable,
-                "diff",
-                "--cached",
-                "--name-status",
-                emu_commit,
-                "--",
-                ".",
-                ":(exclude).github/**",
-                ":(exclude).gitlab/**",
-            ]
-
-            compare_result = subprocess.run(
-                compare_args,
-                cwd=worktree,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                shell=False,
-                timeout=1200,
-            )
-
-            if compare_result.returncode != 0:
-                detail = (compare_result.stderr or compare_result.stdout or "").strip()
-                raise RuntimeError(
-                    "Der resultierende Patch-Tree konnte nicht mit dem "
-                    "OSCam-Emu-Ziel verglichen werden.\n\n"
-                    f"{detail or f'git diff Returncode: {compare_result.returncode}'}"
-                )
-
-            differences = (compare_result.stdout or "").strip()
-
-            if differences:
-                raise RuntimeError(
-                    "Der Patch ist zwar anwendbar, erzeugt aber NICHT "
-                    "den erwarteten OSCam-Emu-Tree.\n\n"
-                    "Abweichungen (ohne .github/.gitlab):\n"
-                    f"{differences}"
-                )
-
-            log("✓ Patch tatsächlich angewendet.")
-            log("✓ Resultierender Tree entspricht exakt dem EMU-Commit.")
-
-        finally:
-            if worktree_added:
-                remove_result = subprocess.run(
-                    [
-                        git_executable,
-                        "worktree",
-                        "remove",
-                        "--force",
-                        worktree,
-                    ],
-                    cwd=emu_repo,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    stdin=subprocess.DEVNULL,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    shell=False,
-                    timeout=1200,
-                )
-                if remove_result.returncode != 0:
-                    log(
-                        "⚠️ Temporärer Worktree konnte nicht vollständig "
-                        "über Git entfernt werden: "
-                        f"{(remove_result.stderr or remove_result.stdout or '').strip()}"
-                    )
-            try:
-                if os.path.isdir(worktree):
-                    shutil.rmtree(worktree, ignore_errors=True)
-            except Exception:
-                pass
-    # ============================================================
-    # START
-    # ============================================================
-
-    try:
-
-        # --------------------------------------------------------
-        # 0 %
-        # --------------------------------------------------------
-
-        set_progress(
-            0,
-            tr(
-                "patch_creating",
-                "🔨 Patch wird erstellt",
-                "🔨 Creating patch"
-            )
-        )
-
-        log("")
-
-        log(
-            "════════════════════════════════════════════"
-        )
-
-        log(
-            "       OSCAM-EMU PATCH ERSTELLEN"
-        )
-
-        log(
-            "════════════════════════════════════════════"
-        )
-
-        log("")
-
-        # ========================================================
-        # GIT
-        # ========================================================
-
-        git_executable = (
-            find_git_executable()
-        )
-
-        log(
-            f"✓ Git: {git_executable}"
-        )
-
-        set_progress(
-            5,
-            tr(
-                "patch_creating",
-                "🔨 Patch wird erstellt",
-                "🔨 Creating patch"
-            )
-        )
-
-        # ========================================================
-        # STREAMBOARD
-        # ========================================================
-
-        stream_dir = os.path.abspath(
-            os.path.expanduser(
-                os.path.expandvars(
-                    STREAMREPO
-                )
-            )
-        )
-
-        set_progress(
-            10,
-            tr(
-                "streamboard_preparing",
-                "🔄 Streamboard wird vorbereitet",
-                "🔄 Preparing Streamboard"
-            )
-        )
-
-        log("")
-
-        log(
-            "📥 AKTUELLES STREAMBOARD"
-        )
-
-        log("")
-
-        log(
-            f"Pfad: {stream_dir}"
-        )
-
-        # WICHTIG:
-        # Das Streamboard-Checkout darf beim ersten Start fehlen.
-        # In der alten Version wurde hier sofort abgebrochen.
-        stream_existed = os.path.isdir(stream_dir)
-        if stream_existed:
-            log("✓ Streamboard-Ordner vorhanden – prüfe Git...")
-        else:
-            log(
-                "⚠️ Streamboard-Git fehlt – "
-                "Repository wird automatisch geklont..."
-            )
-
-        stream_dir = ensure_git_repository(
-            stream_dir,
-            STREAMREPO_URL,
-            description="Streamboard",
-            clone_timeout=1200,
-        )
-
-        if not stream_existed:
-            log("✓ Streamboard-Repository automatisch geklont.")
-
-        stream_commit = (
-            update_repository(
-                stream_dir,
-                "Streamboard"
-            )
-        )
-
-        set_progress(
-            25,
-            tr(
-                "streamboard_updated",
-                "🔄 Streamboard aktualisiert",
-                "🔄 Streamboard updated"
-            )
-        )
-
-        # ========================================================
-        # STREAMBOARD VERSION
-        # ========================================================
-
-        try:
-
-            stream_version = (
-                get_streamboard_version()
-            )
-
-            if not stream_version:
-                stream_version = "unbekannt"
-
-        except Exception:
-
-            stream_version = "unbekannt"
-
-        log(
-            f"✓ Streamboard-Version: "
-            f"{stream_version}"
-        )
-
-        # ========================================================
-        # OSCAM-EMU
-        # ========================================================
-
-        emu_dir = os.path.abspath(
-            PATCH_EMU_GIT_DIR
-        )
-
-        log("")
-
-        log(
-            "📥 AUSGEWÄHLTES OSCAM-EMU-GIT"
-        )
-
-        log("")
-
-        log(
-            f"Pfad: {emu_dir}"
-        )
-
-        # ========================================================
-        # OSCAM-EMU NICHT VORHANDEN
-        # ========================================================
-
-        if not os.path.isdir(
-            emu_dir
-        ):
-
-            log("")
-
-            log(
-                "⚠️ OSCam-Emu-Git wurde nicht gefunden."
-            )
-
-            log(
-                "📥 Klone aktuelles OSCam-Emu "
-                "Repository..."
-            )
-
-            log("")
-
-            if os.path.exists(
-                emu_dir
-            ):
-
-                try:
-
-                    shutil.rmtree(
-                        emu_dir,
-                        ignore_errors=True
-                    )
-
-                except Exception as cleanup_error:
-
-                    raise RuntimeError(
-                        "Das alte OSCam-Emu-Verzeichnis "
-                        "konnte vor dem Klonen nicht "
-                        "entfernt werden.\n\n"
-                        f"{emu_dir}\n\n"
-                        f"{cleanup_error}"
-                    ) from cleanup_error
-
-            try:
 
                 run_git(
                     [
-                        "clone",
-                        EMUREPO_URL,
-                        emu_dir
+                        "reset",
+                        "--hard",
+                        remote_branch
                     ],
-                    cwd=PLUGIN_DIR,
+                    cwd=repo_dir,
                     check=True,
                     timeout=1200
                 )
 
-            except Exception as clone_error:
+                return
 
-                raise RuntimeError(
-                    "OSCam-Emu Repository konnte "
-                    "nicht geklont werden.\n\n"
-                    f"Repository:\n"
-                    f"{EMUREPO_URL}\n\n"
-                    f"Ziel:\n"
-                    f"{emu_dir}\n\n"
-                    f"Fehler:\n"
-                    f"{clone_error}"
-                ) from clone_error
+        log(
+            f"[GIT] {description}: "
+            "kein Remote-Branch gefunden – "
+            "verwende vorhandenen HEAD."
+        )
+
+    # ============================================================
+    # Repository URL aus GUI holen
+    # ============================================================
+
+    def get_emu_repository_url():
+
+        repo_url = None
+
+        # --------------------------------------------------------
+        # Primär: GUI-Instanz
+        # --------------------------------------------------------
+
+        if gui_instance is not None:
+
+            try:
+
+                repo_url = getattr(
+                    gui_instance,
+                    "EMUREPO",
+                    None
+                )
+
+            except Exception:
+                repo_url = None
+
+        # --------------------------------------------------------
+        # Fallback: globale Variable
+        # --------------------------------------------------------
+
+        if not repo_url:
+
+            try:
+
+                repo_url = globals().get(
+                    "EMUREPO",
+                    None
+                )
+
+            except Exception:
+                repo_url = None
+
+        # --------------------------------------------------------
+        # Letzter Fallback
+        # --------------------------------------------------------
+
+        if not repo_url:
+
+            repo_url = globals().get(
+                "EMUREPO_URL",
+                None
+            )
+
+        if not repo_url:
+
+            raise RuntimeError(
+                tr(
+                    "emu_repo_url_missing",
+                    "Keine OSCam-Emu Repository-URL gesetzt.",
+                    "No OSCam-Emu repository URL configured."
+                )
+            )
+
+        repo_url = str(
+            repo_url
+        ).strip()
+
+        if not repo_url:
+
+            raise RuntimeError(
+                tr(
+                    "emu_repo_url_empty",
+                    "Die OSCam-Emu Repository-URL ist leer.",
+                    "The OSCam-Emu repository URL is empty."
+                )
+            )
+
+        return repo_url
+
+    # ============================================================
+    # Remote URL synchronisieren
+    # ============================================================
+
+    def sync_emu_origin(
+        repo_dir,
+        repo_url
+    ):
+
+        current_origin = run_git(
+            [
+                "remote",
+                "get-url",
+                "origin"
+            ],
+            cwd=repo_dir,
+            check=False,
+            timeout=60
+        ).strip()
+
+        # --------------------------------------------------------
+        # Noch kein origin
+        # --------------------------------------------------------
+
+        if not current_origin:
 
             log(
-                "✓ OSCam-Emu Repository "
-                "erfolgreich geklont."
+                "[GIT] OSCam-Emu: "
+                "origin fehlt – füge Remote hinzu."
             )
 
-            log("")
-
-        validate_git_repository(
-            emu_dir,
-            "OSCam-Emu"
-        )
-
-        emu_commit = (
-            update_repository(
-                emu_dir,
-                "OSCam-Emu"
+            run_git(
+                [
+                    "remote",
+                    "add",
+                    "origin",
+                    repo_url
+                ],
+                cwd=repo_dir,
+                check=True,
+                timeout=60
             )
-        )
 
-        set_progress(
-            40,
-            tr(
-                "emu_updated",
-                "🔄 OSCam-Emu aktualisiert",
-                "🔄 OSCam-Emu updated"
+            return
+
+        # --------------------------------------------------------
+        # URL bereits korrekt
+        # --------------------------------------------------------
+
+        if current_origin == repo_url:
+
+            log(
+                "[GIT] OSCam-Emu origin bereits korrekt:"
             )
-        )
 
-        # ========================================================
-        # STREAMBOARD-COMMIT IM EMU-GIT
-        # ========================================================
+            log(
+                f"       {current_origin}"
+            )
 
-        log("")
+            return
 
-        log(
-            "════════════════════════════════════════════"
-        )
-
-        log(
-            "       STREAMBOARD-COMMIT ÜBERNEHMEN"
-        )
+        # --------------------------------------------------------
+        # URL ändern
+        # --------------------------------------------------------
 
         log(
-            "════════════════════════════════════════════"
+            "[GIT] Ändere OSCam-Emu origin:"
         )
-
-        log("")
 
         log(
-            "🔗 Binde aktuelles Streamboard "
-            "als temporären Git-Remote ein..."
+            f"       alt: {current_origin}"
         )
 
-        stream_remote_name = (
+        log(
+            f"       neu: {repo_url}"
+        )
+
+        run_git(
+            [
+                "remote",
+                "set-url",
+                "origin",
+                repo_url
+            ],
+            cwd=repo_dir,
+            check=True,
+            timeout=60
+        )
+
+    # ============================================================
+    # Streamboard-Commit in EMU-Repository verfügbar machen
+    #
+    # WICHTIG:
+    # Kein Merge!
+    # Die Repositories haben unabhängige Historien.
+    # ============================================================
+
+    def import_streamboard_commit(
+        emu_dir,
+        stream_commit
+    ):
+
+        remote_name = (
             "streamboard-current"
         )
 
-        rc, remotes, err = run_git(
+        existing_url = run_git(
             [
-                "remote"
+                "remote",
+                "get-url",
+                remote_name
             ],
             cwd=emu_dir,
-            check=True
+            check=False,
+            timeout=60
+        ).strip()
+
+        stream_url = globals().get(
+            "STREAMREPO_URL",
+            "https://git.streamboard.tv/common/oscam.git"
         )
 
-        remote_names = {
-            line.strip()
-            for line in remotes.splitlines()
-            if line.strip()
-        }
+        stream_url = str(
+            stream_url
+        ).strip()
 
-        if (
-            stream_remote_name
-            in remote_names
-        ):
+        # --------------------------------------------------------
+        # Remote anlegen / URL korrigieren
+        # --------------------------------------------------------
+
+        if not existing_url:
 
             log(
-                f"✓ Git-Remote "
-                f"'{stream_remote_name}' "
-                f"existiert bereits."
+                "[GIT] Füge Streamboard-Remote hinzu:"
+            )
+
+            log(
+                f"       {stream_url}"
+            )
+
+            run_git(
+                [
+                    "remote",
+                    "add",
+                    remote_name,
+                    stream_url
+                ],
+                cwd=emu_dir,
+                check=True,
+                timeout=60
+            )
+
+        elif existing_url != stream_url:
+
+            log(
+                "[GIT] Aktualisiere Streamboard-Remote:"
+            )
+
+            log(
+                f"       {stream_url}"
             )
 
             run_git(
                 [
                     "remote",
                     "set-url",
-                    stream_remote_name,
-                    stream_dir
+                    remote_name,
+                    stream_url
                 ],
                 cwd=emu_dir,
-                check=True
+                check=True,
+                timeout=60
             )
 
-        else:
-
-            log(
-                f"➕ Füge Git-Remote "
-                f"'{stream_remote_name}' hinzu..."
-            )
-
-            run_git(
-                [
-                    "remote",
-                    "add",
-                    stream_remote_name,
-                    stream_dir
-                ],
-                cwd=emu_dir,
-                check=True
-            )
-
-        log("")
+        # --------------------------------------------------------
+        # Nur HEAD holen.
+        #
+        # Kein Merge!
+        # --------------------------------------------------------
 
         log(
-            "🔄 Hole aktuellen "
-            "Streamboard-Commit "
-            "in das EMU-Git..."
+            "[GIT] Hole Streamboard HEAD "
+            "ins OSCam-Emu Repository..."
         )
 
         run_git(
             [
                 "fetch",
-                stream_remote_name,
+                remote_name,
                 "HEAD"
             ],
             cwd=emu_dir,
-            check=True
+            check=True,
+            timeout=1200
         )
 
-        rc, verify_commit, verify_err = (
+        # --------------------------------------------------------
+        # Prüfen, ob der gewünschte Commit vorhanden ist
+        # --------------------------------------------------------
+
+        available = run_git(
+            [
+                "cat-file",
+                "-e",
+                stream_commit + "^{commit}"
+            ],
+            cwd=emu_dir,
+            check=False,
+            timeout=60
+        )
+
+        if available is None:
+            raise RuntimeError(
+                "Streamboard Commit konnte im "
+                "OSCam-Emu Repository nicht gefunden werden."
+            )
+
+        # cat-file liefert bei Erfolg normalerweise leer.
+        # Deshalb separat mit rev-parse prüfen.
+        resolved = run_git(
+            [
+                "rev-parse",
+                "--verify",
+                stream_commit + "^{commit}"
+            ],
+            cwd=emu_dir,
+            check=False,
+            timeout=60
+        ).strip()
+
+        if resolved != stream_commit:
+
+            raise RuntimeError(
+                "Streamboard Commit wurde nicht korrekt importiert:\n"
+                f"Erwartet: {stream_commit}\n"
+                f"Gefunden: {resolved or '<nicht gefunden>'}"
+            )
+
+    # ============================================================
+    # Patch validieren
+    # ============================================================
+
+    def validate_patch_with_git_apply(
+        repo_dir,
+        patch_file
+    ):
+
+        log(
+            "[PATCH] Prüfe Patch mit "
+            "git apply --check..."
+        )
+
+        run_git(
+            [
+                "apply",
+                "--check",
+                "--binary",
+                patch_file
+            ],
+            cwd=repo_dir,
+            check=True,
+            timeout=1200
+        )
+
+        log(
+            "[PATCH] git apply --check: OK"
+        )
+
+    # ============================================================
+    # Patch gegen Zielzustand validieren
+    #
+    # .github und .gitlab werden bewusst nicht verglichen,
+    # weil diese Pfade vom Patch ausgeschlossen werden.
+    # ============================================================
+
+    def validate_applied_patch(
+        stream_repo_dir,
+        stream_commit,
+        emu_repo_dir,
+        emu_commit,
+        patch_file
+    ):
+
+        temp_worktree = None
+
+        try:
+
+            temp_worktree = tempfile.mkdtemp(
+                prefix="oscam_patch_validate_"
+            )
+
+            log(
+                "[PATCH] Erstelle temporären "
+                "Validierungs-Worktree..."
+            )
+
             run_git(
                 [
-                    "cat-file",
-                    "-t",
+                    "worktree",
+                    "add",
+                    "--detach",
+                    temp_worktree,
                     stream_commit
                 ],
-                cwd=emu_dir,
-                check=False
-            )
-        )
-
-        if (
-            rc != 0
-            or verify_commit.strip() != "commit"
-        ):
-
-            log(
-                "⚠️ Direkter HEAD-Fetch hat "
-                "den Commit nicht bereitgestellt."
+                cwd=emu_repo_dir,
+                check=True,
+                timeout=1200
             )
 
             log(
-                "🔄 Wiederhole Fetch mit "
-                "vollständigem Remote-HEAD..."
+                "[PATCH] Wende Patch im "
+                "temporären Worktree an..."
             )
 
             run_git(
                 [
-                    "fetch",
-                    stream_remote_name
+                    "apply",
+                    "--binary",
+                    patch_file
                 ],
-                cwd=emu_dir,
-                check=True
+                cwd=temp_worktree,
+                check=True,
+                timeout=1200
             )
 
-            rc, verify_commit, verify_err = (
-                run_git(
-                    [
-                        "cat-file",
-                        "-t",
-                        stream_commit
-                    ],
-                    cwd=emu_dir,
-                    check=False
+            # ----------------------------------------------------
+            # Alle Änderungen zum Index hinzufügen
+            # ----------------------------------------------------
+
+            run_git(
+                [
+                    "add",
+                    "-A"
+                ],
+                cwd=temp_worktree,
+                check=True,
+                timeout=1200
+            )
+
+            # ----------------------------------------------------
+            # Zielzustand vergleichen.
+            #
+            # .github/** und .gitlab/** werden absichtlich
+            # ausgeschlossen.
+            # ----------------------------------------------------
+
+            differences = run_git(
+                [
+                    "diff",
+                    "--cached",
+                    "--name-status",
+                    emu_commit,
+                    "--",
+                    ".",
+                    ":(exclude).github/**",
+                    ":(exclude).gitlab/**"
+                ],
+                cwd=temp_worktree,
+                check=True,
+                timeout=1200
+            ).strip()
+
+            if differences:
+
+                raise RuntimeError(
+                    "Der angewendete Patch entspricht nicht "
+                    "dem erwarteten OSCam-Emu-Zielzustand.\n\n"
+                    "Abweichungen:\n"
+                    + differences
+                )
+
+            log(
+                "[PATCH] Zielzustand nach Patch: OK"
+            )
+
+        finally:
+
+            # ----------------------------------------------------
+            # Worktree entfernen
+            # ----------------------------------------------------
+
+            if temp_worktree:
+
+                try:
+
+                    run_git(
+                        [
+                            "worktree",
+                            "remove",
+                            "--force",
+                            temp_worktree
+                        ],
+                        cwd=emu_repo_dir,
+                        check=False,
+                        timeout=1200
+                    )
+
+                except Exception:
+                    pass
+
+                try:
+
+                    if os.path.isdir(
+                        temp_worktree
+                    ):
+
+                        shutil.rmtree(
+                            temp_worktree,
+                            ignore_errors=True
+                        )
+
+                except Exception:
+                    pass
+
+                try:
+
+                    run_git(
+                        [
+                            "worktree",
+                            "prune"
+                        ],
+                        cwd=emu_repo_dir,
+                        check=False,
+                        timeout=1200
+                    )
+
+                except Exception:
+                    pass
+
+    # ============================================================
+    # Start
+    # ============================================================
+
+    try:
+
+        set_progress(
+            0,
+            tr(
+                "patch_start",
+                "Starte Patch-Erstellung... %p%",
+                "Starting patch creation... %p%"
+            )
+        )
+
+        # --------------------------------------------------------
+        # Git prüfen
+        # --------------------------------------------------------
+
+        git_executable = find_git_executable()
+
+        if not git_executable:
+
+            raise RuntimeError(
+                tr(
+                    "git_missing",
+                    "Git wurde nicht gefunden.",
+                    "Git was not found."
                 )
             )
 
-        if (
-            rc != 0
-            or verify_commit.strip() != "commit"
-        ):
-
-            raise RuntimeError(
-                "Der aktuelle Streamboard-Commit "
-                "konnte nicht in das EMU-Git "
-                "übernommen werden.\n\n"
-                f"Streamboard-Commit:\n"
-                f"{stream_commit}\n\n"
-                f"{verify_err or verify_commit}"
-            )
+        log(
+            "[GIT] Git:"
+        )
 
         log(
-            "✓ Streamboard-Commit ist jetzt "
-            "im EMU-Git verfügbar."
+            f"       {git_executable}"
+        )
+
+        set_progress(
+            5,
+            tr(
+                "git_detected",
+                "Git erkannt – %p%",
+                "Git detected – %p%"
+            )
+        )
+
+        # ========================================================
+        # Repository-Pfade
+        # ========================================================
+
+        stream_dir = globals().get(
+            "STREAMREPO"
+        )
+
+        if not stream_dir:
+
+            raise RuntimeError(
+                "STREAMREPO ist nicht definiert."
+            )
+
+        stream_dir = os.path.abspath(
+            stream_dir
+        )
+
+        emu_dir = globals().get(
+            "PATCH_EMU_GIT_DIR"
+        )
+
+        if not emu_dir:
+
+            raise RuntimeError(
+                "PATCH_EMU_GIT_DIR ist nicht definiert."
+            )
+
+        emu_dir = os.path.abspath(
+            emu_dir
+        )
+
+        patch_file = globals().get(
+            "PATCH_FILE"
+        )
+
+        if not patch_file:
+
+            raise RuntimeError(
+                "PATCH_FILE ist nicht definiert."
+            )
+
+        patch_file = os.path.abspath(
+            patch_file
+        )
+
+        # ========================================================
+        # EMU URL aus GUI holen
+        # ========================================================
+
+        emu_repo_url = (
+            get_emu_repository_url()
+        )
+
+        log(
+            "[GIT] Ausgewählte "
+            "OSCam-Emu Repository-URL:"
+        )
+
+        log(
+            f"       {emu_repo_url}"
+        )
+
+        # ========================================================
+        # Streamboard Repository
+        # ========================================================
+
+        log(
+            "[GIT] Streamboard Repository:"
+        )
+
+        log(
+            f"       {stream_dir}"
+        )
+
+        if not os.path.isdir(
+            stream_dir
+        ):
+
+            stream_url = globals().get(
+                "STREAMREPO_URL",
+                "https://git.streamboard.tv/common/oscam.git"
+            )
+
+            log(
+                "[GIT] Streamboard Repository fehlt – klone..."
+            )
+
+            ensure_git_repository(
+                stream_dir,
+                stream_url,
+                description="Streamboard",
+                clone_timeout=1200
+            )
+
+        validate_git_repository(
+            stream_dir,
+            "Streamboard"
+        )
+
+        set_progress(
+            10,
+            tr(
+                "stream_prepared",
+                "Streamboard vorbereitet – %p%",
+                "Streamboard prepared – %p%"
+            )
+        )
+
+        # ========================================================
+        # Streamboard aktualisieren
+        # ========================================================
+
+        update_repository(
+            stream_dir,
+            "Streamboard"
+        )
+
+        stream_commit = get_head(
+            stream_dir
+        )
+
+        log(
+            "[STREAMBOARD] Commit:"
+        )
+
+        log(
+            f"             {stream_commit}"
+        )
+
+        set_progress(
+            25,
+            tr(
+                "stream_updated",
+                "Streamboard aktualisiert – %p%",
+                "Streamboard updated – %p%"
+            )
+        )
+
+        # ========================================================
+        # OSCam-Emu Repository
+        # ========================================================
+
+        log(
+            "[GIT] OSCam-Emu Repository:"
+        )
+
+        log(
+            f"       {emu_dir}"
+        )
+
+        # --------------------------------------------------------
+        # Repository erzeugen, falls nicht vorhanden
+        # --------------------------------------------------------
+
+        if not os.path.isdir(
+            emu_dir
+        ):
+
+            log(
+                "[GIT] OSCam-Emu Repository fehlt – klone..."
+            )
+
+            ensure_git_repository(
+                emu_dir,
+                emu_repo_url,
+                description="OSCam-Emu",
+                clone_timeout=1200
+            )
+
+        validate_git_repository(
+            emu_dir,
+            "OSCam-Emu"
+        )
+
+        # --------------------------------------------------------
+        # WICHTIG:
+        # Auch bei bestehendem Repository die URL aus der GUI
+        # übernehmen.
+        # --------------------------------------------------------
+
+        sync_emu_origin(
+            emu_dir,
+            emu_repo_url
+        )
+
+        set_progress(
+            30,
+            tr(
+                "emu_repo_prepared",
+                "OSCam-Emu Repository vorbereitet – %p%",
+                "OSCam-Emu repository prepared – %p%"
+            )
+        )
+
+        # ========================================================
+        # OSCam-Emu aktualisieren
+        # ========================================================
+
+        update_repository(
+            emu_dir,
+            "OSCam-Emu"
+        )
+
+        emu_commit = get_head(
+            emu_dir
+        )
+
+        log(
+            "[OSCAM-EMU] Commit:"
+        )
+
+        log(
+            f"             {emu_commit}"
+        )
+
+        set_progress(
+            40,
+            tr(
+                "emu_updated",
+                "OSCam-Emu aktualisiert – %p%",
+                "OSCam-Emu updated – %p%"
+            )
+        )
+
+        # ========================================================
+        # Alten Patch sichern
+        # ========================================================
+
+        backup_patch = (
+            patch_file
+            + ".alt"
+        )
+
+        if os.path.isfile(
+            patch_file
+        ):
+
+            log(
+                "[PATCH] Alter Patch gefunden."
+            )
+
+            log(
+                "[PATCH] Sichere als:"
+            )
+
+            log(
+                f"        {backup_patch}"
+            )
+
+            try:
+
+                shutil.copy2(
+                    patch_file,
+                    backup_patch
+                )
+
+            except Exception as exc:
+
+                raise RuntimeError(
+                    "Alter Patch konnte nicht als "
+                    f"{backup_patch} gesichert werden:\n"
+                    + str(exc)
+                )
+
+            try:
+
+                os.remove(
+                    patch_file
+                )
+
+            except Exception as exc:
+
+                raise RuntimeError(
+                    "Alter Patch konnte nicht entfernt werden:\n"
+                    + str(exc)
+                )
+
+        # ========================================================
+        # Streamboard Commit in EMU-Repo verfügbar machen
+        # ========================================================
+
+        log(
+            "[GIT] Importiere Streamboard Commit "
+            "in das OSCam-Emu Repository..."
+        )
+
+        import_streamboard_commit(
+            emu_dir,
+            stream_commit
         )
 
         set_progress(
             50,
             tr(
-                "streamboard_imported",
-                "🔄 Streamboard-Stand übernommen",
-                "🔄 Streamboard revision imported"
+                "stream_commit_imported",
+                "Streamboard Commit verfügbar – %p%",
+                "Streamboard commit available – %p%"
             )
         )
 
         # ========================================================
-        # PATCH-DATEI
+        # Sicherheitsprüfung der Commit-Objekte
         # ========================================================
 
-        patch_path = os.path.abspath(
-            PATCH_FILE
+        stream_commit_verified = run_git(
+            [
+                "rev-parse",
+                "--verify",
+                stream_commit + "^{commit}"
+            ],
+            cwd=emu_dir,
+            check=True,
+            timeout=60
+        ).strip()
+
+        emu_commit_verified = run_git(
+            [
+                "rev-parse",
+                "--verify",
+                emu_commit + "^{commit}"
+            ],
+            cwd=emu_dir,
+            check=True,
+            timeout=60
+        ).strip()
+
+        if stream_commit_verified != stream_commit:
+
+            raise RuntimeError(
+                "Streamboard Commit konnte nicht verifiziert werden."
+            )
+
+        if emu_commit_verified != emu_commit:
+
+            raise RuntimeError(
+                "OSCam-Emu Commit konnte nicht verifiziert werden."
+            )
+
+        # ========================================================
+        # Patch erzeugen
+        #
+        # WICHTIG:
+        # --binary
+        #   erzeugt echte Binär-Patchdaten
+        #
+        # --full-index
+        #   vollständige Blob-IDs
+        #
+        # KEIN Merge!
+        # ========================================================
+
+        log(
+            "[PATCH] Erzeuge Roh-Patch:"
         )
 
-        if os.path.isfile(
-            patch_path
+        log(
+            f"        Basis : {stream_commit}"
+        )
+
+        log(
+            f"        Ziel   : {emu_commit}"
+        )
+
+        log(
+            "        Modus  : git diff --binary --full-index"
+        )
+
+        with open(
+            patch_file,
+            "w",
+            encoding="utf-8",
+            newline=""
+        ) as patch_output:
+
+            git_executable = (
+                find_git_executable()
+            )
+
+            result = subprocess.run(
+                [
+                    git_executable,
+                    "diff",
+                    "--binary",
+                    "--full-index",
+                    stream_commit,
+                    emu_commit
+                ],
+                cwd=emu_dir,
+                stdout=patch_output,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=1200
+            )
+
+        stderr = (
+            result.stderr or ""
+        ).strip()
+
+        if result.returncode != 0:
+
+            raise RuntimeError(
+                "git diff konnte den Patch nicht erzeugen.\n"
+                + (
+                    stderr
+                    if stderr
+                    else
+                    "Unbekannter Git-Fehler."
+                )
+            )
+
+        if not os.path.isfile(
+            patch_file
         ):
 
-            log("")
-
-            log(
-                "🗑️ Entferne alten Patch..."
+            raise RuntimeError(
+                "Patch-Datei wurde nicht erzeugt."
             )
 
-            try:
-
-                os.remove(
-                    patch_path
-                )
-
-            except OSError as exc:
-
-                raise RuntimeError(
-                    "Alter Patch konnte nicht "
-                    "gelöscht werden:\n\n"
-                    f"{patch_path}\n\n"
-                    f"{exc}"
-                ) from exc
-
-        # ========================================================
-        # FINALER DIFF
-        # ========================================================
-
-        log("")
-
-        log(
-            "════════════════════════════════════════════"
+        raw_size = os.path.getsize(
+            patch_file
         )
 
-        log(
-            "       FINALER STREAMBOARD → EMU DIFF"
-        )
+        if raw_size <= 0:
 
-        log(
-            "════════════════════════════════════════════"
-        )
-
-        log("")
-
-        log(
-            "Es wird ausschließlich verglichen:"
-        )
-
-        log(
-            f"  Streamboard: {stream_commit}"
-        )
-
-        log(
-            f"  EMU        : {emu_commit}"
-        )
-
-        log("")
-
-        log(
-            "⚠️ Keine historische Base-Revision."
-        )
-
-        log(
-            "⚠️ Kein 3-Way-Merge."
-        )
-
-        log(
-            "⚠️ Kein Diff von 11677 → "
-            "aktueller EMU."
-        )
-
-        log("")
-
-        log(
-            "Es wird direkt der aktuelle Tree "
-            "des Streamboards mit dem aktuellen "
-            "Tree des ausgewählten "
-            "OSCam-Emu-Repositories verglichen."
-        )
-
-        log(
-            "Ausgenommen: .github/ und .gitlab/"
-        )
-
-        log("")
-
-        final_patch_size = (
-            create_binary_git_diff(
-                emu_dir,
-                stream_commit,
-                emu_commit,
-                patch_path
+            raise RuntimeError(
+                "Der erzeugte Patch ist leer."
             )
+
+        log(
+            "[PATCH] Roh-Patch erzeugt:"
+        )
+
+        log(
+            f"        {raw_size:,} Bytes"
+            .replace(",", ".")
+        )
+
+        # ========================================================
+        # Roh-Patch validieren
+        # ========================================================
+
+        validate_patch_with_git_apply(
+            stream_dir,
+            patch_file
         )
 
         set_progress(
             65,
             tr(
-                "patch_diff_created",
-                "🔧 Patch-Diff erstellt",
-                "🔧 Patch diff created"
+                "patch_created",
+                "Patch erzeugt – %p%",
+                "Patch created – %p%"
             )
         )
 
         # ========================================================
-        # DIFF-STATISTIK
+        # Header erzeugen
         # ========================================================
 
-        log("")
-
-        log(
-            "════════════════════════════════════════════"
-        )
-
-        log(
-            "       DIFF-STATISTIK"
-        )
-
-        log(
-            "════════════════════════════════════════════"
-        )
-
-        log("")
-
-        log(
-            "📊 Ermittle Änderungen "
-            "zwischen Streamboard und EMU..."
-        )
+        patch_header = ""
 
         try:
 
-            rc, stdout, stderr = run_git(
-                [
-                    "diff",
-                    "--stat",
-                    stream_commit,
-                    emu_commit
-                ],
-                cwd=emu_dir,
-                check=True
+            header_function = globals().get(
+                "get_patch_header"
             )
 
-            stat_text = (
-                stdout.strip()
-            )
+            if callable(
+                header_function
+            ):
 
-            if stat_text:
+                try:
 
-                log("")
-                log(stat_text)
+                    patch_header = (
+                        header_function()
+                    )
 
-            else:
+                except TypeError:
 
-                log("")
-                log(
-                    "Keine Diff-Statistik verfügbar."
-                )
+                    try:
 
-        except Exception as stat_error:
+                        patch_header = (
+                            header_function(
+                                gui_instance
+                            )
+                        )
 
-            log("")
+                    except Exception:
+                        patch_header = ""
 
-            log(
-                "⚠️ Diff-Statistik konnte nicht "
-                "ermittelt werden:"
-            )
+                except Exception:
+                    patch_header = ""
 
-            log(
-                f"   {stat_error}"
-            )
+        except Exception:
+            patch_header = ""
 
-        log("")
-
-        # ========================================================
-        # PATCH VALIDIEREN
-        # ========================================================
-
-        validate_patch(
-            stream_dir,
-            stream_commit,
-            patch_path,
-            emu_repo=emu_dir,
-            emu_commit=emu_commit,
-        )
-
-        set_progress(
-            80,
-            tr(
-                "patch_checked",
-                "✅ Patch erfolgreich geprüft",
-                "✅ Patch successfully checked"
-            )
-        )
-
-        # ========================================================
-        # PATCH-HEADER
-        # ========================================================
-
-        log("")
-
-        log(
-            "════════════════════════════════════════════"
-        )
-
-        log(
-            "       PATCH-HEADER ERZEUGEN"
-        )
-
-        log(
-            "════════════════════════════════════════════"
-        )
-
-        log("")
-
-        log(
-            "📝 Erzeuge Patch-Header..."
-        )
-
-        try:
-
-            patch_header = (
-                get_patch_header(
-                    streamboard_repo=stream_dir,
-                    emu_repo=emu_dir,
-                    lang=current_lang
-                )
-            )
-
-        except TypeError:
-
-            patch_header = (
-                get_patch_header(
-                    emu_dir,
-                    lang=current_lang
-                )
-            )
-
-        if not patch_header:
-
-            raise RuntimeError(
-                "Patch-Header konnte nicht "
-                "erzeugt werden."
-            )
+        if patch_header is None:
+            patch_header = ""
 
         patch_header = str(
             patch_header
         ).strip()
 
-        # Der OSCam-Emu-Workflow verwendet bewusst einen normalen
-        # Text-Header mit "---" als Trennzeile vor dem Git-Diff.
-        # Keine "#" vor den Headerzeilen setzen.
-        patch_header = patch_header.lstrip("# ").replace("\n# ", "\n")
+        # --------------------------------------------------------
+        # Vorhandene Kommentar-Markierung normalisieren
+        # --------------------------------------------------------
+
+        patch_header = (
+            patch_header
+            .lstrip("# ")
+            .replace(
+                "\n# ",
+                "\n"
+            )
+        )
+
+        # --------------------------------------------------------
+        # Commit-Information anhängen
+        # --------------------------------------------------------
+
         patch_header += (
             "\n---"
-            "\npatch base commit: " + stream_commit +
-            "\npatch target commit: " + emu_commit
+            "\npatch base commit: "
+            + stream_commit
+            + "\npatch target commit: "
+            + emu_commit
         )
 
-        if not patch_header:
+        # ========================================================
+        # Patch-Body lesen
+        # ========================================================
 
-            raise RuntimeError(
-                "Patch-Header ist leer."
+        with open(
+            patch_file,
+            "r",
+            encoding="utf-8",
+            errors="replace",
+            newline=""
+        ) as patch_input:
+
+            patch_body = (
+                patch_input.read()
             )
 
         # ========================================================
-        # PATCH-VERSION
+        # Finalen Patch schreiben
         # ========================================================
 
-        patch_version = (
-            "unbekannt"
+        final_patch = (
+            patch_header
+            + "\n\n"
+            + patch_body.lstrip(
+                "\r\n"
+            )
         )
 
-        for header_line in (
-            patch_header.splitlines()
-        ):
+        with open(
+            patch_file,
+            "w",
+            encoding="utf-8",
+            newline=""
+        ) as patch_output:
 
-            line = (
-                header_line.strip()
+            patch_output.write(
+                final_patch
             )
 
-            # Headerzeilen sind Git-Kommentare und beginnen mit '# '.
-            if line.startswith("#"):
-                line = line[1:].strip()
-
-            if line.lower().startswith(
-                "patch version:"
-            ):
-
-                patch_version = (
-                    line.split(
-                        ":",
-                        1
-                    )[1].strip()
-                )
-
-                break
+        log(
+            "[PATCH] Header eingefügt."
+        )
 
         # ========================================================
-        # GIT-DIFF EINLESEN
+        # Finalen Patch erneut validieren
         # ========================================================
 
-        try:
+        validate_patch_with_git_apply(
+            stream_dir,
+            patch_file
+        )
 
-            with open(
-                patch_path,
-                "r",
-                encoding="utf-8",
-                errors="replace"
-            ) as patch_handle:
-
-                patch_body = (
-                    patch_handle.read()
-                )
-
-        except OSError as exc:
-
-            raise RuntimeError(
-                "Der erzeugte Git-Diff konnte "
-                "nicht gelesen werden:\n\n"
-                f"{patch_path}\n\n"
-                f"{exc}"
-            ) from exc
-
-        if not patch_body.strip():
-
-            raise RuntimeError(
-                "Der validierte Git-Diff "
-                "ist leer."
+        set_progress(
+            80,
+            tr(
+                "patch_validated",
+                "Patch validiert – %p%",
+                "Patch validated – %p%"
             )
+        )
 
         # ========================================================
-        # HEADER + GIT-DIFF
+        # Vollständige Zustandsprüfung
+        #
+        # Hier wird der Patch tatsächlich auf einen
+        # Streamboard-Worktree angewendet und anschließend mit
+        # dem OSCam-Emu Zielzustand verglichen.
+        #
+        # .github/** und .gitlab/** sind absichtlich ausgenommen.
         # ========================================================
 
-        try:
+        log(
+            "[PATCH] Prüfe angewendeten Patch "
+            "gegen OSCam-Emu Zielzustand..."
+        )
 
-            with open(
-                patch_path,
-                "w",
-                encoding="utf-8",
-                newline=""
-            ) as patch_handle:
-
-                patch_handle.write(
-                    patch_header
-                )
-
-                patch_handle.write(
-                    "\n\n"
-                )
-
-                patch_handle.write(
-                    patch_body.lstrip(
-                        "\r\n"
-                    )
-                )
-
-        except OSError as exc:
-
-            raise RuntimeError(
-                "Patch-Header konnte nicht "
-                "in die Patch-Datei "
-                "geschrieben werden:\n\n"
-                f"{patch_path}\n\n"
-                f"{exc}"
-            ) from exc
-
-        # Der Header wird erst nach dem Roh-Diff eingefügt. Deshalb wird
-        # die FERTIGE Patch-Datei noch einmal vollständig validiert.
-        validate_patch(
+        validate_applied_patch(
             stream_dir,
             stream_commit,
-            patch_path,
-            emu_repo=emu_dir,
-            emu_commit=emu_commit,
+            emu_dir,
+            emu_commit,
+            patch_file
         )
 
         set_progress(
             90,
             tr(
-                "patch_header_created",
-                "📝 Patch-Header eingefügt und erneut geprüft",
-                "📝 Patch header inserted and verified again"
+                "patch_final_validated",
+                "Patch final validiert – %p%",
+                "Patch finally validated – %p%"
             )
         )
 
         # ========================================================
-        # FINALE PATCH-GRÖSSE
+        # Endgröße
         # ========================================================
 
-        final_patch_size = (
-            os.path.getsize(
-                patch_path
-            )
+        final_size = os.path.getsize(
+            patch_file
         )
 
-        log("")
+        # ========================================================
+        # Erfolg
+        # ========================================================
 
+        log("")
         log(
-            "✓ Patch-Header erfolgreich "
-            "eingefügt."
+            "========================================"
+        )
+        log(
+            "PATCH ERFOLGREICH ERZEUGT"
+        )
+        log(
+            "========================================"
         )
 
-        log("")
-
-        for header_line in (
-            patch_header.splitlines()
-        ):
-
-            log(
-                f"  {header_line}"
-            )
-
-        log("")
+        log(
+            f"Streamboard Commit: {stream_commit}"
+        )
 
         log(
-            "✓ Finale Patch-Größe: "
-            f"{final_patch_size:,} Bytes"
+            f"OSCam-Emu Commit:   {emu_commit}"
+        )
+
+        log(
+            f"OSCam-Emu URL:      {emu_repo_url}"
+        )
+
+        log(
+            f"Patch: {patch_file}"
+        )
+
+        log(
+            "Größe: "
+            + f"{final_size:,}"
             .replace(",", ".")
-        )
-
-        # ========================================================
-        # ERFOLG
-        # ========================================================
-
-        log("")
-
-        log(
-            "════════════════════════════════════════════"
+            + " Bytes"
         )
 
         log(
-            "       PATCH ERFOLGREICH ERSTELLT"
-        )
-
-        log(
-            "════════════════════════════════════════════"
-        )
-
-        log("")
-
-        log(
-            "📄 Patch:"
-        )
-
-        log(
-            f"   {patch_path}"
-        )
-
-        log("")
-
-        log(
-            "📦 Größe:"
-        )
-
-        log(
-            f"   {final_patch_size:,} Bytes"
-            .replace(",", ".")
-        )
-
-        log("")
-
-        log(
-            "🌐 Streamboard:"
-        )
-
-        log(
-            f"   {stream_commit}"
-        )
-
-        log("")
-
-        log(
-            "🛠️ OSCam-Emu:"
-        )
-
-        log(
-            f"   {emu_commit}"
-        )
-
-        log("")
-
-        log(
-            "✓ Der Patch wurde erfolgreich "
-            "erzeugt, validiert und mit dem "
-            "Patch-Header versehen."
-        )
-
-        # ========================================================
-        # 100 % — PATCH ERSTELLT
-        # ========================================================
-
-        final_text = tr(
-            "patch_created",
-            "✅ Patch erstellt",
-            "✅ Patch created"
+            "========================================"
         )
 
         set_progress(
             100,
-            final_text
-        )
-
-        log("")
-
-        log(
-            "════════════════════════════════════════════"
-        )
-
-        log(
-            "       PATCH FERTIG"
-        )
-
-        log(
-            "════════════════════════════════════════════"
-        )
-
-        log("")
-
-        log(
-            "🧩 PATCH-VERSION:"
-        )
-
-        log("")
-
-        log(
-            f"   {patch_version}"
-        )
-
-        log("")
-
-        log(
-            "✓ Patch-Erstellung vollständig "
-            "abgeschlossen."
+            tr(
+                "patch_success",
+                "Patch erfolgreich erstellt – %p%",
+                "Patch successfully created – %p%"
+            )
         )
 
         # ========================================================
-        # FERTIG-SOUND
+        # Erfolgssound
         # ========================================================
 
         try:
@@ -9195,74 +8735,129 @@ def create_patch(
                     winsound.MB_OK
                 )
 
-        except Exception as sound_error:
+            elif (
+                gui_instance is not None
+                and "safe_play" in globals()
+            ):
 
-            print(
-                "Fertig-Sound konnte nicht "
-                "abgespielt werden:",
-                sound_error,
-                flush=True
-            )
-
-        return True
-
-    except Exception as exc:
-
-        # ========================================================
-        # FEHLER
-        # ========================================================
-
-        log("")
-
-        log(
-            "════════════════════════════════════════════"
-        )
-
-        log(
-            "❌ PATCH-ERSTELLUNG "
-            "FEHLGESCHLAGEN"
-        )
-
-        log(
-            "════════════════════════════════════════════"
-        )
-
-        log("")
-
-        log(
-            str(exc)
-        )
-
-        log("")
-
-        # --------------------------------------------------------
-        # FEHLER NICHT AUF 100 % SETZEN
-        # --------------------------------------------------------
-
-        error_text = tr(
-            "patch_failed",
-            "❌ Patch-Erstellung fehlgeschlagen",
-            "❌ Patch creation failed"
-        )
-
-        set_progress(
-            None,
-            error_text
-        )
-
-        try:
-
-            if winsound is not None:
-
-                winsound.MessageBeep(
-                    winsound.MB_ICONWARNING
+                safe_play(
+                    "complete.oga"
                 )
 
         except Exception:
             pass
 
-        return False
+        return True
 
+    # ============================================================
+    # Fehlerbehandlung
+    # ============================================================
+
+    except Exception as exc:
+
+        error_text = str(
+            exc
+        ).strip()
+
+        if not error_text:
+
+            error_text = tr(
+                "unknown_error",
+                "Unbekannter Fehler.",
+                "Unknown error."
+            )
+
+        log("")
+        log(
+            "========================================"
+        )
+        log(
+            "PATCH FEHLER"
+        )
+        log(
+            "========================================"
+        )
+
+        log(
+            error_text
+        )
+
+        log(
+            "========================================"
+        )
+
+        set_progress(
+            0,
+            "❌ "
+            + tr(
+                "patch_error",
+                "Fehler bei der Patch-Erstellung",
+                "Patch creation failed"
+            )
+        )
+
+        # ========================================================
+        # Fehler-Sound
+        # ========================================================
+
+        try:
+
+            if gui_instance is not None:
+
+                safe_play_function = globals().get(
+                    "safe_play"
+                )
+
+                if callable(
+                    safe_play_function
+                ):
+
+                    safe_play_function(
+                        "dialog-error.oga"
+                    )
+
+            elif winsound is not None:
+
+                winsound.MessageBeep(
+                    winsound.MB_ICONHAND
+                )
+
+        except Exception:
+            pass
+
+        # ========================================================
+        # Fehler ins Info-Fenster
+        # ========================================================
+
+        try:
+
+            if gui_instance is not None:
+
+                append_info = getattr(
+                    gui_instance,
+                    "append_info",
+                    None
+                )
+
+                if callable(
+                    append_info
+                ):
+
+                    append_info(
+                        getattr(
+                            gui_instance,
+                            "info_text",
+                            info_widget
+                        ),
+                        "❌ "
+                        + error_text,
+                        "error"
+                    )
+
+        except Exception:
+            pass
+
+        return False
 
 
 
