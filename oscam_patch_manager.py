@@ -860,7 +860,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "7.2.3"
+APP_VERSION = "7.2.5"
 # ===================== PATCH DIRS =====================
 def get_best_patch_dir():
     """Bestimmt den besten Patch-Ordner (S3, lokal, Home)."""
@@ -4480,12 +4480,15 @@ def get_patch_header(
     # HEADER
     # ============================================================
 
+    # Der Header wird absichtlich als Kommentar geschrieben.
+    # Damit bleibt die Datei sowohl für Menschen lesbar als auch
+    # direkt mit `git apply`/`patch` verarbeitbar.
     return (
-        f"{lang_dict.get('patch_version_header', 'patch version')}: "
+        f"# {lang_dict.get('patch_version_header', 'patch version')}: "
         f"{version}-{build}-{emu_rev} ({commit})\n"
-        f"{lang_dict.get('patch_date', 'patch date')}: "
+        f"# {lang_dict.get('patch_date', 'patch date')}: "
         f"{utc_date}\n"
-        f"{lang_dict.get('patch_modified_by', 'patch modified by')} "
+        f"# {lang_dict.get('patch_modified_by', 'patch modified by')} "
         f"{active_modifier} ({mod_date})"
     )
 
@@ -5794,7 +5797,7 @@ class CinematicMatrixSplash(QWidget):
             r" █  |_|   |_||__| |__||_|  |__||__| |__||_______||_______||___|  |_|      █ ",
             r" █                                                                        █ ",
             r" █──────────────────[ SYSTEM: NEURAL_LINK OPERATIONAL ]───────────────────█ ",
-            r" █                   >> OSCAM EMU PATCH MANAGER v7.2.1   <<               █ ",
+            r" █                   >> OSCAM EMU PATCH MANAGER v7.2.5   <<               █ ",
             r" █             >> CODENAME: Speedy_Oscam-_Patch_Manager 2026 <<           █ ",
             r" ◥◣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◢◤ "
         ]
@@ -7798,7 +7801,11 @@ def create_patch(
             "--find-renames",
             "--find-copies",
             base_commit,
-            target_commit
+            target_commit,
+            "--",
+            ".",
+            ":(exclude).github/**",
+            ":(exclude).gitlab/**",
         ]
 
         try:
@@ -7902,27 +7909,36 @@ def create_patch(
     def validate_patch(
         streamboard_repo,
         streamboard_commit,
-        patch_file
+        patch_file,
+        emu_repo=None,
+        emu_commit=None,
     ):
         """
-        Prüft den erzeugten Patch direkt gegen den bereits geladenen
-        Streamboard-Stand. `git apply --check` verändert das Repository
-        nicht und benötigt keinen zweiten Clone.
+        Validiert den Patch in zwei Stufen:
+
+        1. `git apply --check` gegen den exakten Streamboard-Commit.
+        2. Tatsächliches Anwenden in einem temporären Git-Worktree und
+           exakter Tree-Vergleich mit dem erwarteten OSCam-Emu-Commit.
+
+        Dadurch kann der Generator keinen Patch als erfolgreich melden,
+        wenn er zwar syntaktisch anwendbar ist, aber nicht exakt den
+        gewünschten EMU-Tree erzeugt.
         """
+        import shutil
+        import tempfile
 
         log("")
         log("════════════════════════════════════════════")
-        log("       PATCH VALIDIEREN")
+        log("       PATCH VOLLSTÄNDIG VALIDIEREN")
         log("════════════════════════════════════════════")
         log("")
-        log("🔍 Prüfe Patch gegen das aktuelle Streamboard-Git...")
+        log("🔍 Prüfe Patch gegen den exakten Streamboard-Stand...")
         log(f"   Repository: {streamboard_repo}")
-        log(f"   HEAD      : {streamboard_commit}")
+        log(f"   Base      : {streamboard_commit}")
+        if emu_commit:
+            log(f"   Target    : {emu_commit}")
 
-        validate_git_repository(
-            streamboard_repo,
-            "Streamboard"
-        )
+        validate_git_repository(streamboard_repo, "Streamboard")
 
         if not os.path.isfile(patch_file):
             raise RuntimeError(
@@ -7931,6 +7947,10 @@ def create_patch(
             )
 
         git_executable = find_git_executable()
+
+        # --------------------------------------------------------
+        # 1) Schneller Check gegen den echten Base-Stand
+        # --------------------------------------------------------
         command = [
             git_executable,
             "apply",
@@ -7967,14 +7987,215 @@ def create_patch(
 
         if result.returncode != 0:
             raise RuntimeError(
-                "Der erzeugte Patch konnte nicht auf den aktuellen "
+                "Der erzeugte Patch kann nicht auf den exakten "
                 "Streamboard-Stand angewendet werden.\n\n"
                 f"{stderr or stdout or f'git apply --check Returncode: {result.returncode}'}"
             )
 
-        log("✓ Patch-Validierung erfolgreich.")
-        log("✓ `git apply --check` hat keine Konflikte gemeldet.")
+        log("✓ Syntax-/Konfliktprüfung erfolgreich.")
 
+        # Ohne Ziel-Repository kann nur die Anwendbarkeit geprüft werden.
+        if not emu_repo or not emu_commit:
+            log("✓ Kein EMU-Ziel angegeben – exakter Tree-Vergleich entfällt.")
+            return
+
+        validate_git_repository(emu_repo, "OSCam-Emu")
+
+        # --------------------------------------------------------
+        # 2) Patch wirklich anwenden und Tree exakt vergleichen
+        # --------------------------------------------------------
+        worktree = tempfile.mkdtemp(
+            prefix="oscam_patch_validate_",
+            dir=os.path.dirname(os.path.abspath(patch_file)) or None,
+        )
+        worktree_added = False
+
+        try:
+            log("")
+            log("🧪 Wende Patch in sauberem temporären Worktree an...")
+
+            add_result = subprocess.run(
+                [
+                    git_executable,
+                    "worktree",
+                    "add",
+                    "--detach",
+                    "--force",
+                    worktree,
+                    streamboard_commit,
+                ],
+                cwd=emu_repo,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                shell=False,
+                timeout=1200,
+            )
+
+            if add_result.returncode != 0:
+                detail = (add_result.stderr or add_result.stdout or "").strip()
+                raise RuntimeError(
+                    "Temporärer Git-Worktree konnte nicht erstellt werden.\n\n"
+                    f"{detail or f'Git Returncode: {add_result.returncode}'}"
+                )
+
+            worktree_added = True
+
+            apply_result = subprocess.run(
+                [
+                    git_executable,
+                    "apply",
+                    "--binary",
+                    patch_file,
+                ],
+                cwd=worktree,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                shell=False,
+                timeout=1200,
+            )
+
+            if apply_result.returncode != 0:
+                detail = (apply_result.stderr or apply_result.stdout or "").strip()
+                raise RuntimeError(
+                    "Der Patch konnte im sauberen Streamboard-Worktree "
+                    "nicht tatsächlich angewendet werden.\n\n"
+                    f"{detail or f'git apply Returncode: {apply_result.returncode}'}"
+                )
+
+            # Den resultierenden Worktree exakt als Index abbilden und
+            # dessen Tree-Hash mit dem erwarteten EMU-Tree vergleichen.
+            add_result = subprocess.run(
+                [git_executable, "add", "-A"],
+                cwd=worktree,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                shell=False,
+                timeout=1200,
+            )
+
+            if add_result.returncode != 0:
+                detail = (add_result.stderr or add_result.stdout or "").strip()
+                raise RuntimeError(
+                    "Der angewendete Patch konnte nicht vollständig "
+                    "für den Tree-Vergleich erfasst werden.\n\n"
+                    f"{detail or f'git add Returncode: {add_result.returncode}'}"
+                )
+
+            tree_result = subprocess.run(
+                [git_executable, "write-tree"],
+                cwd=worktree,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                shell=False,
+                timeout=1200,
+            )
+
+            if tree_result.returncode != 0:
+                detail = (tree_result.stderr or tree_result.stdout or "").strip()
+                raise RuntimeError(
+                    "Der resultierende Git-Tree konnte nicht erzeugt werden.\n\n"
+                    f"{detail or f'git write-tree Returncode: {tree_result.returncode}'}"
+                )
+
+            actual_tree = tree_result.stdout.strip()
+
+            # Der offizielle OSCam-Emu-Patch-Workflow erzeugt den
+            # Patch OHNE .github und .gitlab. Deshalb darf der
+            # abschließende Vergleich diese Verzeichnisse ebenfalls
+            # nicht berücksichtigen.
+            compare_args = [
+                git_executable,
+                "diff",
+                "--cached",
+                "--name-status",
+                emu_commit,
+                "--",
+                ".",
+                ":(exclude).github/**",
+                ":(exclude).gitlab/**",
+            ]
+
+            compare_result = subprocess.run(
+                compare_args,
+                cwd=worktree,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                shell=False,
+                timeout=1200,
+            )
+
+            if compare_result.returncode != 0:
+                detail = (compare_result.stderr or compare_result.stdout or "").strip()
+                raise RuntimeError(
+                    "Der resultierende Patch-Tree konnte nicht mit dem "
+                    "OSCam-Emu-Ziel verglichen werden.\n\n"
+                    f"{detail or f'git diff Returncode: {compare_result.returncode}'}"
+                )
+
+            differences = (compare_result.stdout or "").strip()
+
+            if differences:
+                raise RuntimeError(
+                    "Der Patch ist zwar anwendbar, erzeugt aber NICHT "
+                    "den erwarteten OSCam-Emu-Tree.\n\n"
+                    "Abweichungen (ohne .github/.gitlab):\n"
+                    f"{differences}"
+                )
+
+            log("✓ Patch tatsächlich angewendet.")
+            log("✓ Resultierender Tree entspricht exakt dem EMU-Commit.")
+
+        finally:
+            if worktree_added:
+                remove_result = subprocess.run(
+                    [
+                        git_executable,
+                        "worktree",
+                        "remove",
+                        "--force",
+                        worktree,
+                    ],
+                    cwd=emu_repo,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    stdin=subprocess.DEVNULL,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    shell=False,
+                    timeout=1200,
+                )
+                if remove_result.returncode != 0:
+                    log(
+                        "⚠️ Temporärer Worktree konnte nicht vollständig "
+                        "über Git entfernt werden: "
+                        f"{(remove_result.stderr or remove_result.stdout or '').strip()}"
+                    )
+            try:
+                if os.path.isdir(worktree):
+                    shutil.rmtree(worktree, ignore_errors=True)
+            except Exception:
+                pass
     # ============================================================
     # START
     # ============================================================
@@ -8506,6 +8727,10 @@ def create_patch(
             "OSCam-Emu-Repositories verglichen."
         )
 
+        log(
+            "Ausgenommen: .github/ und .gitlab/"
+        )
+
         log("")
 
         final_patch_size = (
@@ -8602,7 +8827,9 @@ def create_patch(
         validate_patch(
             stream_dir,
             stream_commit,
-            patch_path
+            patch_path,
+            emu_repo=emu_dir,
+            emu_commit=emu_commit,
         )
 
         set_progress(
@@ -8668,6 +8895,16 @@ def create_patch(
             patch_header
         ).strip()
 
+        # Der OSCam-Emu-Workflow verwendet bewusst einen normalen
+        # Text-Header mit "---" als Trennzeile vor dem Git-Diff.
+        # Keine "#" vor den Headerzeilen setzen.
+        patch_header = patch_header.lstrip("# ").replace("\n# ", "\n")
+        patch_header += (
+            "\n---"
+            "\npatch base commit: " + stream_commit +
+            "\npatch target commit: " + emu_commit
+        )
+
         if not patch_header:
 
             raise RuntimeError(
@@ -8689,6 +8926,10 @@ def create_patch(
             line = (
                 header_line.strip()
             )
+
+            # Headerzeilen sind Git-Kommentare und beginnen mit '# '.
+            if line.startswith("#"):
+                line = line[1:].strip()
 
             if line.lower().startswith(
                 "patch version:"
@@ -8773,12 +9014,22 @@ def create_patch(
                 f"{exc}"
             ) from exc
 
+        # Der Header wird erst nach dem Roh-Diff eingefügt. Deshalb wird
+        # die FERTIGE Patch-Datei noch einmal vollständig validiert.
+        validate_patch(
+            stream_dir,
+            stream_commit,
+            patch_path,
+            emu_repo=emu_dir,
+            emu_commit=emu_commit,
+        )
+
         set_progress(
             90,
             tr(
                 "patch_header_created",
-                "📝 Patch-Header eingefügt",
-                "📝 Patch header inserted"
+                "📝 Patch-Header eingefügt und erneut geprüft",
+                "📝 Patch header inserted and verified again"
             )
         )
 
@@ -9458,7 +9709,7 @@ def backup_old_patch(
 
     alt_patch = os.path.join(
         target_dir,
-        "alt_oscam-emu.patch"
+        "oscam-emu.patch.alt"
     )
 
     # ---------------------------------------------------------
