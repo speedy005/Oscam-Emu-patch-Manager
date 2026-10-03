@@ -2,16 +2,17 @@ import os
 import sys
 import platform
 import importlib.util
+# ============================================================
+# QT / PLATTFORM-UMGEBUNG
+# ============================================================
+# Windows benötigt für problematische OpenGL-Treiber den Software-Renderer.
+# Unter Linux darf QT_QPA_PLATFORM NICHT auf "windows" gesetzt werden.
+# Wenn der Benutzer QT_QPA_PLATFORM bereits gesetzt hat, bleibt diese Wahl
+# unangetastet.
 if platform.system() == "Windows":
-    os.environ["QT_QUICK_BACKEND"] = "software"
-    os.environ["QT_OPENGL"] = "software"
-# Erzwingt den Software-Modus, BEVOR irgendein Qt-Modul geladen wird
-os.environ["QT_QUICK_BACKEND"] = "software"
-os.environ["QT_OPENGL"] = (
-    "desktop"  # Falls 'software' nicht reicht, 'desktop' erzwingen
-)
-os.environ["QT_QPA_PLATFORM"] = "windows"
-os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
+    os.environ.setdefault("QT_QUICK_BACKEND", "software")
+    os.environ.setdefault("QT_OPENGL", "software")
+    os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "0")
 #!/usr/bin/env python3
 # =====================================================================
 #  OSCam Emu Patch Generator
@@ -380,10 +381,14 @@ def ensure_dependencies():
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
     # optional sound
+    # Sound-Unterstützung ist bewusst plattformspezifisch.
+    # winsound darf niemals unter Linux importiert werden.
     if platform.system() == "Linux":
         HAS_SOUND_SUPPORT = shutil.which("paplay") is not None
-    else:
+    elif platform.system() == "Windows":
         HAS_SOUND_SUPPORT = True
+    else:
+        HAS_SOUND_SUPPORT = False
 
     return True
 
@@ -606,7 +611,7 @@ class S3InstallWorker(QThread):
             is_win = platform.system() == "Windows"
             subprocess.check_call(
                 ["git", "clone", "--depth", "1", repo_url, temp_clone],
-                shell=is_win
+                shell=False
             )
 
             # 2. .git Ordner bereinigen (Windows Fix)
@@ -614,7 +619,7 @@ class S3InstallWorker(QThread):
             if os.path.exists(git_dir):
                 if is_win:
                     subprocess.run(['attrib', '-R', os.path.join(git_dir, '*'), '/S', '/D'], 
-                                   shell=True, capture_output=True)
+                                   shell=False, capture_output=True)
                 shutil.rmtree(git_dir, ignore_errors=True)
 
             # 3. Zielordner erstellen und kopieren
@@ -688,7 +693,7 @@ class NcamBonecrewInstallWorker(QThread):
             
             result = subprocess.run(
                 cmd,
-                shell=is_win,
+                shell=False,
                 capture_output=True,
                 text=True
             )
@@ -705,7 +710,7 @@ class NcamBonecrewInstallWorker(QThread):
             if os.path.exists(git_dir):
                 if is_win:
                     subprocess.run(['attrib', '-R', os.path.join(git_dir, '*'), '/S', '/D'], 
-                                   shell=True, capture_output=True)
+                                   shell=False, capture_output=True)
                 shutil.rmtree(git_dir, ignore_errors=True)
 
             # 3. Zielordner erstellen und kopieren
@@ -770,7 +775,7 @@ class S4InstallWorker(QThread):
             is_win = platform.system() == "Windows"
             subprocess.check_call(
                 ["git", "clone", "--depth", "1", repo_url, temp_clone],
-                shell=is_win
+                shell=False
             )
 
             # 4. FIX FÜR PERMISSION DENIED (Windows):
@@ -778,7 +783,7 @@ class S4InstallWorker(QThread):
             if os.path.exists(git_dir):
                 if is_win:
                     subprocess.run(['attrib', '-R', os.path.join(git_dir, '*'), '/S', '/D'], 
-                                   shell=True, capture_output=True)
+                                   shell=False, capture_output=True)
                 shutil.rmtree(git_dir, ignore_errors=True)
 
             # 5. Ziel-Unterordner erstellen
@@ -855,7 +860,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "7.2.1"
+APP_VERSION = "7.2.3"
 # ===================== PATCH DIRS =====================
 def get_best_patch_dir():
     """Bestimmt den besten Patch-Ordner (S3, lokal, Home)."""
@@ -4696,9 +4701,18 @@ def run_bash(cmd, cwd=None, info_widget=None, lang="DE", logger=None):
         env = os.environ.copy()
         env["GIT_TERMINAL_PROMPT"] = "0"
 
+        # `run_bash()` wird nur für Git-Kommandos verwendet. Deshalb
+        # niemals eine Shell dazwischenschalten; das ist auf Windows
+        # zuverlässiger und verhindert Quoting-Probleme.
+        if isinstance(cmd, str):
+            import shlex
+            command = shlex.split(cmd, posix=(os.name != "nt"))
+        else:
+            command = list(cmd)
+
         process = subprocess.Popen(
-            cmd,
-            shell=True,
+            command,
+            shell=False,
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -5687,30 +5701,11 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QPainter, QColor
 
 # =============================================================================
-# 1. WINDOWS SYSTEM UTILS (Path, Admin, Tools)
+# 1. WINDOWS SYSTEM UTILS
 # =============================================================================
-
-def is_admin():
-    try: return ctypes.windll.shell32.IsUserAnAdmin()
-    except: return False
-
-def verify_tools(tools):
-    """Funktionstest der Tools mit Sound-Feedback bei Fehlern."""
-    check_cmds = {
-        "git": ["git", "--version"], "nmap": ["nmap", "--version"],
-        "7z": ["7z", "-h"], "zip": ["7z", "-h"], "ssh": ["ssh", "-V"],
-        "patch": ["patch", "--version"],
-        "hashcat": ["hashcat", "--version"] if shutil.which("hashcat") else ["hashcat64", "--version"]
-    }
-    print("\n[ ] Initialisiere System-Kern...")
-    for t in tools:
-        cmd = check_cmds.get(t, [t, "--version"])
-        try:
-            res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
-            ok = res.returncode in [0, 1]
-            print(f"{'[✓]' if ok else '[!]'} {t}")
-        except:
-            print(f"[!] {t} kritischer Fehler!"); winsound.Beep(500, 200)
+# is_admin() und verify_tools() sind weiter oben zentral definiert.
+# Keine zweite Implementierung: die doppelte Version war unter Linux
+# insbesondere wegen winsound() problematisch.
 
 import sys
 import random
@@ -6895,6 +6890,115 @@ def get_streamboard_version():
     except Exception:
         return "unbekannt"
 
+
+# ============================================================
+# GIT-REPOSITORY HILFSFUNKTIONEN
+# ============================================================
+
+def ensure_git_repository(
+    repo_dir,
+    remote_url,
+    description="Repository",
+    clone_timeout=1200,
+):
+    """
+    Stellt sicher, dass repo_dir ein gültiges Git-Repository ist.
+
+    Verhalten:
+      - vorhandenes Git-Repository -> prüfen und weiterverwenden
+      - fehlendes Verzeichnis -> automatisch klonen
+      - vorhandenes leeres Verzeichnis -> automatisch klonen
+      - vorhandener Nicht-Git-Ordner mit Inhalt -> NICHT löschen,
+        sondern verständlichen Fehler melden
+
+    Es wird bewusst niemals shell=True verwendet. Damit ist der Ablauf
+    auf Linux und Windows 11 identisch.
+    """
+    if not repo_dir:
+        raise RuntimeError(f"{description}: Repository-Pfad fehlt.")
+
+    repo_dir = os.path.abspath(os.path.expanduser(os.path.expandvars(str(repo_dir))))
+    parent = os.path.dirname(repo_dir) or os.getcwd()
+
+    # Bereits vorhandenes Repository
+    if os.path.isdir(repo_dir):
+        try:
+            git_command(
+                ["rev-parse", "--is-inside-work-tree"],
+                cwd=repo_dir,
+                allowed_returncodes=(0,),
+                timeout=60,
+            )
+            return repo_dir
+        except Exception:
+            try:
+                has_entries = any(os.scandir(repo_dir))
+            except OSError as exc:
+                raise RuntimeError(
+                    f"{description}: Verzeichnis kann nicht gelesen werden:\n{repo_dir}\n\n{exc}"
+                ) from exc
+
+            if has_entries:
+                raise RuntimeError(
+                    f"{description}: Der Zielordner existiert bereits, "
+                    f"ist aber kein Git-Repository:\n\n{repo_dir}\n\n"
+                    "Bitte den Ordner in der GUI-Konfiguration ändern "
+                    "oder den Inhalt sichern und entfernen."
+                )
+
+    elif os.path.exists(repo_dir):
+        raise RuntimeError(
+            f"{description}: Der Repository-Pfad ist keine Verzeichnis:\n\n{repo_dir}"
+        )
+
+    os.makedirs(parent, exist_ok=True)
+
+    # Git clone erzeugt repo_dir selbst bzw. füllt ein leeres Verzeichnis.
+    print(
+        f"[GIT] {description} fehlt – klone Repository:\n"
+        f"      {remote_url}\n"
+        f"      -> {repo_dir}",
+        flush=True,
+    )
+
+    run = subprocess.run
+    git_executable = find_git_executable()
+    result = run(
+        [git_executable, "clone", "--depth", "1", remote_url, repo_dir],
+        cwd=parent,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        shell=False,
+        timeout=clone_timeout,
+    )
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(
+            f"{description}: Git-Clone fehlgeschlagen.\n\n"
+            f"Repository:\n{remote_url}\n\n"
+            f"Ziel:\n{repo_dir}\n\n"
+            f"{detail or f'Git Returncode: {result.returncode}'}"
+        )
+
+    # Nach dem Clone noch einmal sauber prüfen.
+    git_command(
+        ["rev-parse", "--is-inside-work-tree"],
+        cwd=repo_dir,
+        allowed_returncodes=(0,),
+        timeout=60,
+    )
+
+    print(
+        f"[GIT] {description} erfolgreich geklont: {repo_dir}",
+        flush=True,
+    )
+    return repo_dir
+
 # ===================== PATCH FUNCTIONS =====================
 def create_patch(
     gui_instance=None,
@@ -7433,21 +7537,8 @@ def create_patch(
                 f"{repo_dir}"
             )
 
-        git_dir = os.path.join(
-            repo_dir,
-            ".git"
-        )
-
-        if not os.path.isdir(
-            git_dir
-        ):
-
-            raise RuntimeError(
-                f"{description}: "
-                "Kein gültiges Git-Repository:\n\n"
-                f"{repo_dir}"
-            )
-
+        # Nicht auf ".git" als Verzeichnis bestehen: Git-Worktrees
+        # verwenden beispielsweise eine .git-Datei.
         run_git(
             [
                 "rev-parse",
@@ -7814,197 +7905,75 @@ def create_patch(
         patch_file
     ):
         """
-        Prüft den erzeugten Patch gegen
-        einen frischen Streamboard-Stand.
+        Prüft den erzeugten Patch direkt gegen den bereits geladenen
+        Streamboard-Stand. `git apply --check` verändert das Repository
+        nicht und benötigt keinen zweiten Clone.
         """
 
         log("")
-
-        log(
-            "════════════════════════════════════════════"
-        )
-
-        log(
-            "       PATCH VALIDIEREN"
-        )
-
-        log(
-            "════════════════════════════════════════════"
-        )
-
+        log("════════════════════════════════════════════")
+        log("       PATCH VALIDIEREN")
+        log("════════════════════════════════════════════")
         log("")
+        log("🔍 Prüfe Patch gegen das aktuelle Streamboard-Git...")
+        log(f"   Repository: {streamboard_repo}")
+        log(f"   HEAD      : {streamboard_commit}")
 
-        log(
-            "Erstelle temporäres Streamboard-Git..."
+        validate_git_repository(
+            streamboard_repo,
+            "Streamboard"
         )
 
-        validation_dir = tempfile.mkdtemp(
-            prefix="oscam_patch_validate_",
-            dir=PLUGIN_DIR
-        )
+        if not os.path.isfile(patch_file):
+            raise RuntimeError(
+                "Patch-Datei für die Validierung wurde nicht gefunden:\n\n"
+                f"{patch_file}"
+            )
+
+        git_executable = find_git_executable()
+        command = [
+            git_executable,
+            "apply",
+            "--check",
+            "--binary",
+            patch_file,
+        ]
 
         try:
+            result = subprocess.run(
+                command,
+                cwd=streamboard_repo,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                shell=False,
+                timeout=1200,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                "Die Patch-Validierung wurde wegen eines Timeouts abgebrochen."
+            ) from exc
+        except OSError as exc:
+            raise RuntimeError(
+                "Git konnte für die Patch-Validierung nicht gestartet werden:\n\n"
+                f"{exc}"
+            ) from exc
 
-            run_git(
-                [
-                    "init"
-                ],
-                cwd=validation_dir,
-                check=True
+        stdout = (result.stdout or "").strip()
+        stderr = (result.stderr or "").strip()
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                "Der erzeugte Patch konnte nicht auf den aktuellen "
+                "Streamboard-Stand angewendet werden.\n\n"
+                f"{stderr or stdout or f'git apply --check Returncode: {result.returncode}'}"
             )
 
-            run_git(
-                [
-                    "remote",
-                    "add",
-                    "streamboard",
-                    streamboard_repo
-                ],
-                cwd=validation_dir,
-                check=True
-            )
-
-            log(
-                "🔄 Hole aktuellen "
-                "Streamboard-Commit..."
-            )
-
-            run_git(
-                [
-                    "fetch",
-                    "streamboard",
-                    streamboard_commit
-                ],
-                cwd=validation_dir,
-                check=True
-            )
-
-            rc, stdout, stderr = run_git(
-                [
-                    "cat-file",
-                    "-t",
-                    streamboard_commit
-                ],
-                cwd=validation_dir,
-                check=False
-            )
-
-            if (
-                rc != 0
-                or stdout.strip() != "commit"
-            ):
-
-                raise RuntimeError(
-                    "Der Streamboard-Commit "
-                    "konnte für die "
-                    "Patch-Validierung nicht "
-                    "geladen werden.\n\n"
-                    f"Commit:\n"
-                    f"{streamboard_commit}\n\n"
-                    f"{stderr or stdout}"
-                )
-
-            run_git(
-                [
-                    "checkout",
-                    "--detach",
-                    streamboard_commit
-                ],
-                cwd=validation_dir,
-                check=True
-            )
-
-            log(
-                "✓ Aktueller Streamboard-Stand "
-                "für Validierung ausgecheckt."
-            )
-
-            log("")
-
-            log(
-                "🔍 Prüfe Patch mit "
-                "git apply --check..."
-            )
-
-            git_executable = (
-                find_git_executable()
-            )
-
-            command = [
-                git_executable,
-                "apply",
-                "--check",
-                "--binary",
-                patch_file
-            ]
-
-            try:
-
-                result = subprocess.run(
-                    command,
-                    cwd=validation_dir,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    stdin=subprocess.DEVNULL,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    shell=False,
-                    timeout=1200
-                )
-
-            except subprocess.TimeoutExpired as exc:
-
-                raise RuntimeError(
-                    "Die Patch-Validierung "
-                    "wurde wegen eines "
-                    "Timeouts abgebrochen."
-                ) from exc
-
-            stdout = (
-                result.stdout
-                or ""
-            ).strip()
-
-            stderr = (
-                result.stderr
-                or ""
-            ).strip()
-
-            if result.returncode != 0:
-
-                error_text = (
-                    stderr
-                    or stdout
-                    or
-                    f"git apply --check "
-                    f"Returncode: "
-                    f"{result.returncode}"
-                )
-
-                raise RuntimeError(
-                    "Der erzeugte Patch konnte "
-                    "nicht auf den aktuellen "
-                    "Streamboard-Stand "
-                    "angewendet werden.\n\n"
-                    f"{error_text}"
-                )
-
-            log(
-                "✓ Patch-Validierung erfolgreich."
-            )
-
-        finally:
-
-            try:
-
-                shutil.rmtree(
-                    validation_dir,
-                    ignore_errors=True
-                )
-
-            except Exception:
-                pass
+        log("✓ Patch-Validierung erfolgreich.")
+        log("✓ `git apply --check` hat keine Konflikte gemeldet.")
 
     # ============================================================
     # START
@@ -8067,12 +8036,11 @@ def create_patch(
         # ========================================================
 
         stream_dir = os.path.abspath(
-            STREAMREPO
-        )
-
-        validate_git_repository(
-            stream_dir,
-            "Streamboard"
+            os.path.expanduser(
+                os.path.expandvars(
+                    STREAMREPO
+                )
+            )
         )
 
         set_progress(
@@ -8095,6 +8063,28 @@ def create_patch(
         log(
             f"Pfad: {stream_dir}"
         )
+
+        # WICHTIG:
+        # Das Streamboard-Checkout darf beim ersten Start fehlen.
+        # In der alten Version wurde hier sofort abgebrochen.
+        stream_existed = os.path.isdir(stream_dir)
+        if stream_existed:
+            log("✓ Streamboard-Ordner vorhanden – prüfe Git...")
+        else:
+            log(
+                "⚠️ Streamboard-Git fehlt – "
+                "Repository wird automatisch geklont..."
+            )
+
+        stream_dir = ensure_git_repository(
+            stream_dir,
+            STREAMREPO_URL,
+            description="Streamboard",
+            clone_timeout=1200,
+        )
+
+        if not stream_existed:
+            log("✓ Streamboard-Repository automatisch geklont.")
 
         stream_commit = (
             update_repository(
@@ -11691,7 +11681,7 @@ class PatchManagerGUI(QWidget):
         stored_ncam = self.current_config.get(
             "ncam_custom_path", "/opt/s3_ncam_bonecrew_test"
         )
-        self.NCAM_PATH = os.path.normpath(stored_s3)
+        self.NCAM_PATH = os.path.normpath(stored_ncam)
 
         # --- NEU: SOFORT-CHECK BEIM START ---
         # Wir triggern die Prüfung kurz nach dem Start, damit der Button
@@ -13076,35 +13066,6 @@ class PatchManagerGUI(QWidget):
     import platform
     import shutil
 
-    def auto_detect_s4_path(self):
-        """Sucht den SimpleBuild 4 Pfad automatisch auf Linux & Windows."""
-        if hasattr(self, "hide_final_label"):
-            self.hide_final_label()
-
-        is_win = platform.system() == "Windows"
-        project = "simplebuild4"
-    
-        # Basis-Pfade definieren
-        if is_win:
-            base_candidates = ["C:\\opt", "D:\\opt", os.path.expanduser("~")]
-        else:
-            base_candidates = ["/opt", os.path.expanduser("~")]
-
-        search_paths = [os.path.join(b, project) for b in base_candidates]
-        search_paths.append(os.getcwd()) # Aktuelles Verzeichnis einbeziehen
-
-        # Suche nach der 's4' Datei (mit .exe unter Windows)
-        binary = "s4.exe" if is_win else "s4"
-    
-        for p in search_paths:
-            full_binary_path = os.path.normpath(os.path.join(p, binary))
-            if os.path.exists(full_binary_path):
-                self.S4_PATH = os.path.normpath(p)
-                print(f"[AUTO-DETECT] SimpleBuild 4 gefunden: {self.S4_PATH}")
-                return True
-            
-        print("[AUTO-DETECT] SimpleBuild 4 konnte nicht gefunden werden.")
-        return False
     
     def auto_detect_s3_path(self):
         """Sucht S3 Installation automatisch auf Linux & Windows."""
@@ -13963,8 +13924,18 @@ class PatchManagerGUI(QWidget):
                         
                             # Windows 11 tar kann .zst Archive nativ entpacken. Wir entpacken direkt in das Git-Wurzelverzeichnis.
                             subprocess.run(
-                                f'tar -xvf "{tmp_pkg}" -C "{git_path}" --strip-components=1', 
-                                shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                                [
+                                    "tar",
+                                    "-xvf",
+                                    tmp_pkg,
+                                    "-C",
+                                    git_path,
+                                    "--strip-components=1",
+                                ],
+                                shell=False,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                check=False,
                             )
                         
                             if os.path.exists(tmp_pkg): os.remove(tmp_pkg)
@@ -14220,7 +14191,7 @@ class PatchManagerGUI(QWidget):
                         # Windows benötigt dafür ein kurzes PowerShell-Kommando im Hintergrund
                         ps_cmd = f'Expand-Archive -Path "{tmp_tar}" -DestinationPath "{git_path}" -Force'
                         # Falls es ein echtes .tar.gz ist, nutzen wir das integrierte tar-Tool von Windows 11:
-                        subprocess.run(["tar", "-xzf", tmp_tar, "-C", git_path], shell=True, stdout=subprocess.DEVNULL)
+                        subprocess.run(["tar", "-xzf", tmp_tar, "-C", git_path], shell=False, stdout=subprocess.DEVNULL)
                         
                         # Temporäre Datei löschen
                         if os.path.exists(tmp_tar): os.remove(tmp_tar)
@@ -14478,12 +14449,18 @@ class PatchManagerGUI(QWidget):
     def copy_to_clipboard(self):
         """Kopiert den Log in die Zwischenablage."""
         QApplication.clipboard().setText(self.info_text.toPlainText())
-        # Kleiner visueller Effekt (Sound oder kurze Meldung)
-        if globals().get("HAS_SOUND_SUPPORT"):
-            # Nutzt deinen vorhandenen Beep
-            import winsound
-
-            winsound.MessageBeep()
+        # Kleiner visueller Effekt – plattformabhängig.
+        if platform.system() == "Windows" and globals().get("HAS_SOUND_SUPPORT"):
+            try:
+                import winsound
+                winsound.MessageBeep()
+            except Exception:
+                pass
+        elif platform.system() == "Linux" and "safe_play" in globals():
+            try:
+                safe_play("dialog-information.oga")
+            except Exception:
+                pass
 
     def _play_sys_sound(self, sound_type="standard"):
         """Spielt System-Sounds für Windows und Linux ohne externe Dateien."""
@@ -14810,11 +14787,6 @@ class PatchManagerGUI(QWidget):
             self.log(f"🚨 Subprocess Fehler: {e}")
             return False
 
-    def log(self, message):
-        """Hilfsfunktion für die Log-Ausgabe (falls nicht vorhanden)."""
-        # Hier deine TextEdit-Logik einfügen, z.B.:
-        # self.log_window.append(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-        print(message)
 
     def get_language_flag(self):
         """Gibt die passende Flagge zur Systemsprache zurück."""
@@ -15410,88 +15382,6 @@ class PatchManagerGUI(QWidget):
             if "save_config" in globals():
                 save_config(cfg, gui_instance=self, silent=True)
 
-    def toggle_theme(self):
-        """Schaltet zwischen Matrix-Mode (Dark) und System-Style (Light) um."""
-
-        # --- Final Label ausblenden, falls sichtbar ---
-        if hasattr(self, "hide_final_label"):
-            self.hide_final_label()
-        elif hasattr(self, "final_label") and self.final_label:
-            self.final_label.hide()
-        from PyQt6.QtCore import QTimer
-        from PyQt6.QtWidgets import QApplication
-
-        lang = getattr(self, "LANG", "de").lower()
-        is_de = lang == "de"
-        pbar = getattr(self, "progress_bar", None)
-        btn_online = getattr(self, "btn_patch_online", None)  # Dein neuer Button
-
-        # Prüfen, ob wir gerade im System-Style (Light) sind
-        if not self.styleSheet():
-            # --- WECHSEL ZU MATRIX MODE (DARK) ---
-            self.setStyleSheet(self.get_matrix_style())
-            self.theme_button.setText("☀️ Light Mode")
-
-            # 1. STYLE FÜR ONLINE-BUTTON (Orange/Gold Schema)
-            if btn_online:
-                btn_online.setStyleSheet(
-                    f"""
-                    QPushButton {{
-                        background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #F37804, stop:1 #8B4513);
-                        color: white; font-weight: 700; border: 1px solid #444; border-radius: 10px;
-                        font-size: {getattr(self, 'font_size_buttons', 12)}px;
-                    }}
-                    QPushButton:hover {{ background-color: #FFA500; border: 1px solid #ffffff; }}
-                """
-                )
-
-            # 2. PROGRESSBAR (Regenbogen + Schwarze Schrift)
-            if pbar:
-                rainbow = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF0000, stop:0.2 #FF7F00, stop:0.4 #FFFF00, stop:0.6 #00FF00, stop:0.8 #0000FF, stop:1 #8B00FF)"
-                pbar.setStyleSheet(
-                    f"""
-                    QProgressBar {{ text-align: center; font-weight: 700; border: 2px solid #222; border-radius: 6px; background-color: #111; color: black; font-size: 11pt; }}
-                    QProgressBar::chunk {{ background: {rainbow}; border-radius: 4px; }}
-                """
-                )
-                msg = "Matrix Mode aktiviert" if is_de else "Matrix Mode activated"
-                pbar.setValue(100)
-                pbar.setFormat(msg)
-                if hasattr(self, "pbar_idle"):
-                    QTimer.singleShot(3000, self.pbar_idle)
-
-        else:
-            # --- WECHSEL ZU SYSTEM STYLE (LIGHT) ---
-            self.setStyleSheet("")  # Reset
-            self.theme_button.setText("📟 Matrix Mode")
-
-            # 1. STYLE FÜR ONLINE-BUTTON (Blau Schema)
-            if btn_online:
-                btn_online.setStyleSheet(
-                    f"""
-                    QPushButton {{
-                        background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3498db, stop:1 #2980b9);
-                        color: white; font-weight: 700; border: 1px solid #1c5980; border-radius: 10px;
-                        font-size: {getattr(self, 'font_size_buttons', 12)}px;
-                    }}
-                    QPushButton:hover {{ background-color: #5dade2; border: 1px solid #ffffff; }}
-                """
-                )
-
-            # 2. PROGRESSBAR (Schlicht)
-            if pbar:
-                pbar.setStyleSheet(
-                    "QProgressBar { text-align: center; font-weight: 700; border: 1px solid #AAA; border-radius: 5px; background-color: #DDD; color: black; } QProgressBar::chunk { background-color: #4CAF50; }"
-                )
-                msg = "System Style aktiviert" if is_de else "System Style activated"
-                pbar.setValue(100)
-                pbar.setFormat(msg)
-                if hasattr(self, "pbar_idle"):
-                    QTimer.singleShot(3000, self.pbar_idle)
-
-        if "safe_play" in globals():
-            safe_play("dialog-information.oga")
-        QApplication.processEvents()
 
     def animate_everything(self):
         """Steuert das Blinken von Text und LEDs."""
@@ -18406,53 +18296,6 @@ class PatchManagerGUI(QWidget):
                 pbar.setFormat("❌ Fehler!" if is_de else "❌ Error!")
             QMessageBox.critical(self, "Update Error", f"Fehler: {str(e)}")
 
-    def ask_for_update(self, latest_version):
-        """Fragt nach Update mit Sound und bereitet die Regenbogen-Bar vor."""
-        from PyQt6.QtWidgets import QMessageBox, QApplication
-        from PyQt6.QtCore import QTimer
-
-        lang = str(getattr(self, "LANG", "de")).lower()[:2]
-        is_de = lang == "de"
-        pbar = getattr(self, "progress_bar", None)
-
-        if "safe_play" in globals():
-            safe_play("dialog-information.oga")
-
-        msg_box = QMessageBox(self)
-        msg_box.setIcon(QMessageBox.Icon.Question)
-        msg_box.setWindowTitle("Update" if is_de else "Update Available")
-        message = (
-            f"Update {latest_version} verfügbar. Jetzt installieren?"
-            if is_de
-            else f"Update {latest_version} available. Install now?"
-        )
-        msg_box.setText(message)
-
-        yes_btn = msg_box.addButton(
-            "Ja" if is_de else "Yes", QMessageBox.ButtonRole.YesRole
-        )
-        no_btn = msg_box.addButton(
-            "Nein" if is_de else "No", QMessageBox.ButtonRole.NoRole
-        )
-        msg_box.setDefaultButton(yes_btn)
-
-        if msg_box.exec() == 0 or msg_box.clickedButton() == yes_btn:
-            if pbar:
-                rainbow = (
-                    "qlineargradient(x1:0, y1:0, x2:1, y2:0, "
-                    "stop:0.0 #FF0000, stop:0.2 #FF7F00, stop:0.4 #FFFF00, "
-                    "stop:0.6 #00FF00, stop:0.8 #0000FF, stop:1.0 #8B00FF);"
-                )
-                pbar.setStyleSheet(
-                    f"QProgressBar {{ text-align: center; font-weight: 900; color: black; background: #111; border: 2px solid #222; }} "
-                    f"QProgressBar::chunk {{ background: {rainbow}; }}"
-                )
-                pbar.setFormat("🚀 Starte..." if is_de else "🚀 Starting...")
-                pbar.setValue(5)
-                pbar.show()
-                QApplication.processEvents()
-
-            QTimer.singleShot(200, lambda: self.plugin_update_action(latest_version))
 
     def ask_for_update(self, latest_version):
         """Fragt nach Update mit Sound und bereitet die Regenbogen-Bar vor."""
@@ -19098,316 +18941,6 @@ class PatchManagerGUI(QWidget):
         # ---------------------------------------------------------
         parent_layout.addWidget(container)
 
-    def edit_emu_github_config(self, info_widget=None, progress_callback=None):
-        """
-        Öffnet den GitHub-Konfigurationsdialog mit Regenbogen-ProgressBar,
-        schwarzer Schrift, Sound und zweisprachigem UI.
-        """
-        from PyQt6.QtWidgets import (
-            QFormLayout,
-            QLabel,
-            QDialogButtonBox,
-            QApplication,
-        )
-        from PyQt6.QtCore import QTimer
-
-        # --- Final Label verstecken ---
-        if hasattr(self, "hide_final_label"):
-            self.hide_final_label()
-
-        widget = info_widget or getattr(self, "info_text", None)
-        pbar = getattr(self, "progress_bar", None)
-
-        current_lang = str(
-            getattr(self, "LANG", "de")
-        ).lower()[:2]
-
-        is_de = current_lang == "de"
-
-        # ---------------------------------------------------------
-        # ProgressBar Styles
-        # ---------------------------------------------------------
-        rainbow = (
-            "qlineargradient(x1:0, y1:0, x2:1, y2:0, "
-            "stop:0.0 #FF0000, "
-            "stop:0.2 #FF7F00, "
-            "stop:0.4 #FFFF00, "
-            "stop:0.6 #00FF00, "
-            "stop:0.8 #0000FF, "
-            "stop:1.0 #8B00FF);"
-        )
-
-        style_rainbow = f"""
-            QProgressBar {{
-                text-align: center;
-                font-weight: bold;
-                border: 2px solid #222;
-                border-radius: 6px;
-                background-color: #111;
-                color: black;
-                font-size: 11pt;
-            }}
-
-            QProgressBar::chunk {{
-                background-color: {rainbow};
-                border-radius: 4px;
-            }}
-        """
-
-        style_fade = """
-            QProgressBar {
-                text-align: center;
-                font-weight: bold;
-                border: 2px solid #222;
-                border-radius: 6px;
-                background-color: #111;
-                color: black;
-                font-size: 11pt;
-            }
-
-            QProgressBar::chunk {
-                background-color: transparent;
-            }
-        """
-
-        # ---------------------------------------------------------
-        # Helper: Text
-        # ---------------------------------------------------------
-        def get_txt(key, default=""):
-            try:
-                lang_pkg = TEXTS.get(
-                    current_lang,
-                    TEXTS.get("de", {})
-                )
-                return lang_pkg.get(key, default)
-            except Exception:
-                return default
-
-        # ---------------------------------------------------------
-        # Helper: Progress
-        # ---------------------------------------------------------
-        def set_progress(value, text=None):
-            if pbar:
-                pbar.setStyleSheet(style_rainbow)
-                pbar.setValue(value)
-                pbar.setFormat(text if text else "%p%")
-                pbar.show()
-
-            if progress_callback:
-                try:
-                    progress_callback(value)
-                except Exception:
-                    pass
-
-            QApplication.processEvents()
-
-        # ---------------------------------------------------------
-        # Helper: Abschluss
-        # ---------------------------------------------------------
-        def finalize_pbar(text, visible_seconds=3):
-            if not pbar:
-                return
-
-            pbar.setValue(100)
-            pbar.setFormat(text)
-
-            QTimer.singleShot(
-                visible_seconds * 1000,
-                lambda: pbar.setStyleSheet(style_fade)
-            )
-
-            QTimer.singleShot(
-                visible_seconds * 1000,
-                lambda: pbar.setValue(0)
-            )
-
-            if progress_callback:
-                QTimer.singleShot(
-                    visible_seconds * 1000,
-                    lambda: progress_callback(0)
-                )
-
-        # ---------------------------------------------------------
-        # Helper: Sound
-        # ---------------------------------------------------------
-        def play_sound(action="open"):
-            try:
-                if "safe_play" in globals():
-                    sound_map = {
-                        "open": "dialog-information.oga",
-                        "save": "complete.oga",
-                    }
-
-                    safe_play(
-                        sound_map.get(
-                            action,
-                            "complete.oga"
-                        )
-                    )
-            except Exception:
-                pass
-
-        # ---------------------------------------------------------
-        # Start
-        # ---------------------------------------------------------
-        loading_text = (
-            get_txt(
-                "loading_config",
-                "Konfiguration wird geladen..."
-            )
-            if is_de
-            else "Loading configuration..."
-        )
-
-        set_progress(
-            20,
-            "⏳ " + loading_text
-        )
-
-        play_sound("open")
-
-        # ---------------------------------------------------------
-        # Dialog erstellen
-        # ---------------------------------------------------------
-        dialog = GithubConfigDialog(self)
-
-        set_progress(50)
-
-        # ---------------------------------------------------------
-        # UI-Texte
-        # ---------------------------------------------------------
-        layout = dialog.layout()
-
-        if isinstance(layout, QFormLayout):
-            mapping = [
-                (
-                    dialog.patch_repo,
-                    "patch_repo_label",
-                    "Patch Repo:"
-                ),
-                (
-                    dialog.patch_branch,
-                    "patch_branch_label",
-                    "Patch Branch:"
-                ),
-                (
-                    dialog.emu_repo,
-                    "emu_repo_label",
-                    "EMU Repo:"
-                ),
-                (
-                    dialog.emu_branch,
-                    "emu_branch_label",
-                    "EMU Branch:"
-                ),
-                (
-                    dialog.username,
-                    "github_username_label",
-                    "GitHub User:"
-                ),
-                (
-                    dialog.token,
-                    "github_token_label",
-                    "Token:"
-                ),
-                (
-                    dialog.user_name,
-                    "github_user_name_label",
-                    "Git Name:"
-                ),
-                (
-                    dialog.user_email,
-                    "github_user_email_label",
-                    "Git Email:"
-                ),
-            ]
-
-            for field, key, default in mapping:
-                label = layout.labelForField(field)
-
-                if label and isinstance(label, QLabel):
-                    label.setText(
-                        get_txt(key, default)
-                    )
-
-        # ---------------------------------------------------------
-        # Dialog-Buttons
-        # ---------------------------------------------------------
-        button_box = dialog.findChild(QDialogButtonBox)
-
-        if button_box:
-            save_btn = button_box.button(
-                QDialogButtonBox.StandardButton.Save
-            )
-
-            cancel_btn = button_box.button(
-                QDialogButtonBox.StandardButton.Cancel
-            )
-
-            if save_btn:
-                save_btn.setText(
-                    get_txt(
-                        "save",
-                        "Speichern"
-                    )
-                )
-
-            if cancel_btn:
-                cancel_btn.setText(
-                    get_txt(
-                        "cancel",
-                        "Abbrechen"
-                    )
-                )
-
-        # ---------------------------------------------------------
-        # Dialog bereit
-        # ---------------------------------------------------------
-        set_progress(
-            80,
-            "🔧 "
-            + (
-                get_txt(
-                    "config_ready",
-                    "Bereit"
-                )
-                if is_de
-                else "Ready"
-            )
-        )
-
-        # ---------------------------------------------------------
-        # Dialog ausführen
-        # ---------------------------------------------------------
-        if dialog.exec():
-            msg = get_txt(
-                "github_config_saved",
-                "GitHub Konfiguration gespeichert."
-            )
-
-            if widget:
-                self.append_info(
-                    widget,
-                    msg,
-                    "success"
-                )
-
-            play_sound("save")
-
-            finalize_pbar(
-                "✅ "
-                + (
-                    get_txt(
-                        "saved",
-                        "Gespeichert!"
-                    )
-                    if is_de
-                    else "Saved!"
-                )
-            )
-
-        else:
-            finalize_pbar("%p%")
     
     def update_all_texts(self):
         # ---------------------------------------------------------
@@ -19914,13 +19447,18 @@ class PatchManagerGUI(QWidget):
         import subprocess
 
         try:
-            # shell=True ist für komplexe git-Befehle oft notwendig
+            if isinstance(cmd, str):
+                import shlex
+                command = shlex.split(cmd, posix=(os.name != "nt"))
+            else:
+                command = list(cmd)
+
             result = subprocess.run(
-                cmd,
+                command,
                 cwd=cwd,
                 capture_output=True,
                 text=True,
-                shell=True,
+                shell=False,
                 check=False,
             )
 
@@ -25819,17 +25357,6 @@ class PatchManagerGUI(QWidget):
     # =====================
     # GITHUB EMU CREDENTIALS
     # =====================
-    def check_emu_credentials(self):
-        cfg = load_github_config()
-        if not all([cfg.get("emu_repo_url"), cfg.get("username"), cfg.get("token")]):
-            lang = getattr(self, "LANG", LANG)
-            self.append_info(
-                self.info_text,
-                TEXTS[lang].get(
-                    "github_emu_credentials_missing", "GitHub-Emu-Zugangsdaten fehlen!"
-                ),
-                "warning",
-            )
 
     
 
@@ -26550,8 +26077,19 @@ if __name__ == "__main__":
             if system == "Windows":
                 if not ctypes.windll.shell32.IsUserAnAdmin():
                     print("[SYSTEM] Fordere Windows-Admin-Rechte an...")
-                    params = " ".join(sys.argv + ["--elevated"])
-                    ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1)
+                    # Windows benötigt korrekt gequotete Argumente,
+                    # insbesondere bei Installationspfaden mit Leerzeichen.
+                    params = subprocess.list2cmdline(
+                        sys.argv[1:] + ["--elevated"]
+                    )
+                    ctypes.windll.shell32.ShellExecuteW(
+                        None,
+                        "runas",
+                        sys.executable,
+                        params,
+                        None,
+                        1
+                    )
                     sys.exit(0)
             
             elif system == "Linux":
@@ -26636,14 +26174,15 @@ if __name__ == "__main__":
 
     system = platform.system()
     if system == "Linux":
-        # Wenn wir als Root laufen und XDG_RUNTIME_DIR fehlt immer noch, 
-        # schalten wir Wayland ab und zwingen Qt auf X11-Zusammenarbeit (xcb via xhost)
-        if os.geteuid() == 0 and not os.getenv("XDG_RUNTIME_DIR"):
-            os.environ["QT_QPA_PLATFORM"] = "xcb"
-        else:
-            # Standard: Versuche Wayland, nutze xcb als stabilen Fallback
-            os.environ["QT_QPA_PLATFORM"] = "wayland;xcb"
-        
+        # Qt akzeptiert hier einen einzelnen Plattform-Plugin-Namen.
+        # Wenn der Benutzer bereits QT_QPA_PLATFORM gesetzt hat, bleibt
+        # diese Auswahl unangetastet.
+        if not os.environ.get("QT_QPA_PLATFORM"):
+            if os.environ.get("WAYLAND_DISPLAY"):
+                os.environ["QT_QPA_PLATFORM"] = "wayland"
+            elif os.environ.get("DISPLAY"):
+                os.environ["QT_QPA_PLATFORM"] = "xcb"
+
     elif system == "Windows":
         if hasattr(sys.stdout, "reconfigure"):
             sys.stdout.reconfigure(encoding="utf-8")
@@ -26660,18 +26199,30 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    app = QApplication.instance() or QApplication(sys.argv)
-    app.setStyle("Fusion")
-    
-    # Plugin Pfad für Qt sicherstellen
+    # Plugin-Pfad für Qt vor QApplication setzen.
     plugin_path = QLibraryInfo.path(QLibraryInfo.LibraryPath.PluginsPath)
     if plugin_path:
-        os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = plugin_path
+        os.environ.setdefault("QT_QPA_PLATFORM_PLUGIN_PATH", plugin_path)
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    app.setStyle("Fusion")
 
     # ---------------- 3. DISPLAY / RESOLUTION DETECTION ----------------
     screen_geo = app.primaryScreen().availableGeometry()
     width, height = screen_geo.width(), screen_geo.height()
-    print(f"[SYSTEM] Display erkannt: {width}x{height} | User: {os.getlogin() if platform.system() == 'Windows' else os.getenv('USER')}")
+    try:
+        import getpass
+        current_user = getpass.getuser()
+    except Exception:
+        current_user = (
+            os.environ.get("USERNAME")
+            or os.environ.get("USER")
+            or "unknown"
+        )
+
+    print(
+        f"[SYSTEM] Display erkannt: {width}x{height} | User: {current_user}"
+    )
 
     # ---------------- 4. FONT-FIX ASYNC START ----------------
     if 'auto_install_emoji_font' in globals():
@@ -26699,7 +26250,7 @@ if __name__ == "__main__":
             main_window.setWindowTitle("OSCam Emu Patch Manager v4.0 - by speedy005")
 
             main_window.showMaximized()
-            main_window.raise_
+            main_window.raise_()
             # ERZWUNGENER NEUSTART-FIX: 
             # Sobald das Fenster nach dem Cinematic Splash erscheint, geben wir 
             # PyQt 100ms Zeit, die Buttons im Grafikspeicher zu verankern.
