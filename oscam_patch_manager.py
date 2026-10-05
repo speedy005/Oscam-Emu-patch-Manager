@@ -98,14 +98,12 @@ def check_python():
             print("Python 3.9+ required")
         sys.exit(1)
 
-
 def ensure_pip():
     try:
         import pip
     except ImportError:
         import ensurepip
         ensurepip.bootstrap()
-
 
 def check_git_windows():
     """
@@ -161,7 +159,6 @@ def check_git_windows():
     except Exception as e:
         print(f"[!] Unerwarteter Fehler bei der Git-Installation: {e}")
 
-
 def install_python_packages():
     # WICHTIG: Bevor wir Python-Pakete prüfen oder installieren, 
     # stellen wir sicher, dass Git auf Windows-Systemen vorhanden ist!
@@ -189,7 +186,6 @@ def install_python_packages():
 
     # Skript nach erfolgreicher Installation neu starten, damit die Module geladen werden können
     os.execv(sys.executable, [sys.executable] + sys.argv)
-
 
 def fix_windows_path():
     """Fügt Standard-Installationspfade bekannter Tools zum System-PATH hinzu (Windows)."""
@@ -860,7 +856,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "7.2.8"
+APP_VERSION = "7.2.9"
 # ===================== PATCH DIRS =====================
 def get_best_patch_dir():
     """Bestimmt den besten Patch-Ordner (S3, lokal, Home)."""
@@ -895,7 +891,6 @@ import shutil
 import subprocess
 import tempfile
 
-
 # ============================================================
 # HAUPTVERZEICHNIS / PLUGIN-PFADE
 # ============================================================
@@ -906,7 +901,6 @@ import tempfile
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 WORK_DIR = PLUGIN_DIR
-
 
 # ============================================================
 # DATEIEN
@@ -947,7 +941,6 @@ ICON_DIR = os.path.join(
     "icons"
 )
 
-
 # ============================================================
 # REPOSITORY-VERZEICHNISSE
 # ============================================================
@@ -961,7 +954,6 @@ PATCH_EMU_GIT_DIR = os.path.join(
     PLUGIN_DIR,
     "oscam-emu-git"
 )
-
 
 # ============================================================
 # ALTE / BACKUP-PFADE
@@ -3775,10 +3767,6 @@ def get_oscam_version(repo_dir, commit):
 
     return ""
 
-
-
-
-
 def _git_remote_default_branch(url, timeout=30):
     """
     Ermittelt den Default-Branch eines Git-Repositorys.
@@ -3893,8 +3881,6 @@ def _git_remote_default_branch(url, timeout=30):
         "und weder 'master' noch 'main' konnten gefunden werden."
     )
 
-
-
 def _git_add_remote(repo_dir, name, url):
     """
     Fügt einen Git-Remote hinzu oder aktualisiert dessen URL.
@@ -4000,8 +3986,6 @@ def _git_add_remote(repo_dir, name, url):
                 f"URL: {url}\n"
                 f"{exc}"
             ) from exc
-
-
 
 def _git_fetch_branch(repo_dir, remote, branch, timeout=30):
     """
@@ -4122,8 +4106,6 @@ def _git_fetch_branch(repo_dir, remote, branch, timeout=30):
 
     return ref
 
-
-
 def _git_tree_sha(repo_dir, ref):
     """
     Ermittelt den vollständigen Commit-SHA einer Git-Referenz.
@@ -4186,8 +4168,6 @@ def _git_tree_sha(repo_dir, ref):
 
     return sha.lower()
 
-
-
 def _extract_patch_diff(patch_path):
     """Entfernt den UI-Metadaten-Header und liefert ausschließlich den Unified Diff."""
     from pathlib import Path
@@ -4211,7 +4191,8 @@ def get_patch_header(
     streamboard_repo=None,
     emu_repo=None,
     lang="de",
-    modifier=None
+    modifier=None,
+    streamboard_commit=None
 ):
     """
     Erzeugt den Patch-Header aus dem tatsächlich verwendeten
@@ -4265,30 +4246,85 @@ def get_patch_header(
     )
 
     # ============================================================
-    # STREAMBOARD-VERSION
+    # EXAKTE STREAMBOARD-REVISION
+    #
+    # WICHTIG:
+    # Der Header darf NICHT vom zufälligen lokalen HEAD abhängen.
+    # Die Version und der Commit werden aus genau der Revision gelesen,
+    # die create_patch() als Patch-Basis verwendet.
     # ============================================================
+
+    exact_stream_commit = str(
+        streamboard_commit or ""
+    ).strip().lower()
+
+    if exact_stream_commit:
+
+        if not re.fullmatch(
+            r"[0-9a-f]{40}",
+            exact_stream_commit
+        ):
+            raise RuntimeError(
+                "Ungültiger Streamboard Commit für den Patch-Header:\n"
+                + exact_stream_commit
+            )
 
     version = "unknown"
     build = "unknown"
 
-    globals_file = os.path.join(
-        streamboard_repo,
-        "globals.h"
-    )
+    # globals.h direkt aus dem exakten Git-Commit lesen.
+    if exact_stream_commit:
 
-    if os.path.isfile(
-        globals_file
+        try:
+
+            result = _git_command(
+                [
+                    "show",
+                    exact_stream_commit + ":globals.h"
+                ],
+                cwd=streamboard_repo
+            )
+
+            content = (
+                result.stdout or ""
+            )
+
+            match = re.search(
+                r'#define\s+CS_VERSION\s+"([^"]+)"',
+                content
+            )
+
+            if match:
+
+                cs_version = match.group(1).strip()
+                parts = cs_version.split("-")
+
+                if parts:
+                    version = parts[0].strip()
+
+                if len(parts) > 1:
+                    build = parts[1].strip()
+
+        except Exception as exc:
+            log(
+                "[PATCH HEADER] Konnte globals.h aus dem exakten "
+                f"Streamboard Commit nicht lesen: {exc}"
+            )
+
+    # Fallback nur dann, wenn kein exakter Commit übergeben wurde.
+    if (
+        not exact_stream_commit
+        and os.path.isfile(os.path.join(streamboard_repo, "globals.h"))
     ):
 
         try:
 
             with open(
-                globals_file,
+                os.path.join(streamboard_repo, "globals.h"),
                 "r",
                 encoding="utf-8",
                 errors="replace"
             ) as handle:
-
                 content = handle.read()
 
             match = re.search(
@@ -4299,10 +4335,7 @@ def get_patch_header(
             if match:
 
                 cs_version = match.group(1).strip()
-
-                parts = cs_version.split(
-                    "-"
-                )
+                parts = cs_version.split("-")
 
                 if parts:
                     version = parts[0].strip()
@@ -4314,20 +4347,17 @@ def get_patch_header(
             pass
 
     # ============================================================
-    # FALLBACK:
-    # VORHANDENE STREAMBOARD-VERSIONSFUNKTION VERWENDEN
+    # FALLBACK: VORHANDENE STREAMBOARD-VERSIONSFUNKTION
     # ============================================================
 
     if (
         version == "unknown"
         or build == "unknown"
-    ):
+    ) and not exact_stream_commit:
 
         try:
 
-            detected_version = (
-                get_streamboard_version()
-            )
+            detected_version = get_streamboard_version()
 
             if detected_version:
 
@@ -4337,9 +4367,7 @@ def get_patch_header(
 
                 if detected_version.lower() != "unbekannt":
 
-                    parts = detected_version.split(
-                        "-"
-                    )
+                    parts = detected_version.split("-")
 
                     if parts:
                         version = parts[0].strip()
@@ -4394,48 +4422,59 @@ def get_patch_header(
             pass
 
     # ============================================================
-    # EMU-COMMIT
+    # PATCH-VERSION COMMIT
+    #
+    # Der Commit in "patch version: ... (XXXXXXXX)" ist die
+    # Streamboard-Basisrevision, NICHT der OSCam-Emu Zielcommit.
     # ============================================================
 
     commit = "unknown"
 
-    try:
+    if exact_stream_commit:
 
-        result = _git_command(
-            [
-                "rev-parse",
-                "--short=8",
-                "HEAD"
-            ],
-            cwd=emu_repo
-        )
+        commit = exact_stream_commit[:8]
 
-        commit = (
-            result.stdout or ""
-        ).strip()
+    else:
 
-        if not commit:
-            commit = "unknown"
+        try:
 
-    except Exception:
-        pass
+            result = _git_command(
+                [
+                    "rev-parse",
+                    "--short=8",
+                    "HEAD"
+                ],
+                cwd=streamboard_repo
+            )
+
+            commit = (
+                result.stdout or ""
+            ).strip()
+
+            if not commit:
+                commit = "unknown"
+
+        except Exception:
+            pass
 
     # ============================================================
-    # COMMIT-DATUM
+    # STREAMBOARD-COMMIT-DATUM
     # ============================================================
 
     utc_date = "unknown"
 
     try:
 
+        date_ref = exact_stream_commit or "HEAD"
+
         result = _git_command(
             [
                 "show",
                 "-s",
                 "--format=%cI",
-                "HEAD"
+                date_ref
             ],
-            cwd=emu_repo
+            cwd=streamboard_repo
         )
 
         commit_date = (
@@ -4461,7 +4500,6 @@ def get_patch_header(
 
     except Exception:
 
-        # Fallback auf aktuelle UTC-Zeit.
         utc_date = datetime.now(
             timezone.utc
         ).strftime(
@@ -5459,8 +5497,6 @@ def github_upload_oscam_emu_folder(
 
         play_sound(False)
 
-
-
 # =====================
 # GITHUB CONFIG DIALOG
 # =====================
@@ -5797,7 +5833,7 @@ class CinematicMatrixSplash(QWidget):
             r" █  |_|   |_||__| |__||_|  |__||__| |__||_______||_______||___|  |_|      █ ",
             r" █                                                                        █ ",
             r" █──────────────────[ SYSTEM: NEURAL_LINK OPERATIONAL ]───────────────────█ ",
-            r" █                   >> OSCAM EMU PATCH MANAGER v7.2.8  <<               █ ",
+            r" █                   >> OSCAM EMU PATCH MANAGER v7.2.9  <<               █ ",
             r" █             >> CODENAME: Speedy_Oscam-_Patch_Manager 2026 <<           █ ",
             r" ◥◣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◢◤ "
         ]
@@ -6353,7 +6389,6 @@ class CinematicMatrixSplash(QWidget):
         self.is_closing = True
         self.play_sound("end")
         QTimer.singleShot(300, lambda: (self.finished.emit(), self.close()))
-
 
 # ===================== CLEAN PATCH FOLDER =====================
 
@@ -7058,6 +7093,7 @@ def create_patch(
     progress_callback=None
 ):
     import os
+    import re
     import shutil
     import subprocess
     import tempfile
@@ -7100,13 +7136,9 @@ def create_patch(
             )
 
             if isinstance(texts, dict):
-
-                value = texts.get(
-                    key
-                )
+                value = texts.get(key)
 
                 if isinstance(value, dict):
-
                     value = value.get(
                         current_lang
                     )
@@ -7142,7 +7174,6 @@ def create_patch(
         ):
 
             try:
-
                 widget = getattr(
                     gui_instance,
                     name,
@@ -7166,7 +7197,6 @@ def create_patch(
     def process_events():
 
         try:
-
             if QApplication is not None:
                 QApplication.processEvents()
 
@@ -7195,7 +7225,6 @@ def create_patch(
                 )
 
                 if progress_bar is not None:
-
                     progress_bar.setValue(
                         value
                     )
@@ -7203,13 +7232,11 @@ def create_patch(
             if text is not None:
 
                 if progress_bar is not None:
-
                     progress_bar.setFormat(
                         str(text)
                     )
 
             if progress_bar is not None:
-
                 progress_bar.show()
 
         except Exception:
@@ -7225,11 +7252,13 @@ def create_patch(
                     )
 
                 elif text is not None:
+
                     try:
                         progress_callback(
                             None,
                             text
                         )
+
                     except TypeError:
                         pass
 
@@ -7248,6 +7277,7 @@ def create_patch(
             print(
                 str(message)
             )
+
         except Exception:
             pass
 
@@ -7290,6 +7320,15 @@ def create_patch(
     ):
 
         git_executable = find_git_executable()
+
+        if not git_executable:
+            raise RuntimeError(
+                tr(
+                    "git_missing",
+                    "Git wurde nicht gefunden.",
+                    "Git was not found."
+                )
+            )
 
         command = [
             git_executable
@@ -7375,7 +7414,7 @@ def create_patch(
             )
 
     # ============================================================
-    # HEAD ermitteln
+    # Lokalen HEAD ermitteln
     # ============================================================
 
     def get_head(repo_dir):
@@ -7414,6 +7453,28 @@ def create_patch(
             )
 
         return ""
+
+    # ============================================================
+    # Ausgewählten OSCam-Emu-Branch aktualisieren
+    # ============================================================
+
+    def update_emu_repository(repo_dir, branch):
+        branch = str(branch or "master").strip() or "master"
+        run_git(["fetch", "origin", branch], cwd=repo_dir, check=True, timeout=1200)
+        remote_ref = f"origin/{branch}"
+        if not run_git(["rev-parse", "--verify", remote_ref], cwd=repo_dir, check=False, timeout=60).strip():
+            raise RuntimeError(f"OSCam-Emu Branch konnte nicht gefunden werden: {branch}")
+        local_branch = run_git(["symbolic-ref", "--short", "HEAD"], cwd=repo_dir, check=False, timeout=60).strip()
+        if local_branch == branch:
+            run_git(["reset", "--hard", remote_ref], cwd=repo_dir, check=True, timeout=1200)
+        else:
+            exists = run_git(["show-ref", "--verify", f"refs/heads/{branch}"], cwd=repo_dir, check=False, timeout=60).strip()
+            if exists:
+                run_git(["checkout", branch], cwd=repo_dir, check=True, timeout=1200)
+                run_git(["reset", "--hard", remote_ref], cwd=repo_dir, check=True, timeout=1200)
+            else:
+                run_git(["checkout", "-B", branch, remote_ref], cwd=repo_dir, check=True, timeout=1200)
+        return get_head(repo_dir)
 
     # ============================================================
     # Repository aktualisieren
@@ -7486,82 +7547,107 @@ def create_patch(
         )
 
     # ============================================================
-    # Repository URL aus GUI holen
+    # EXAKTEN STREAMBOARD-MASTER-HEAD ermitteln
+    #
+    # WICHTIG:
+    # Die Patch-Basis kommt direkt von refs/heads/master
+    # des Streamboard-Servers und NICHT vom lokalen HEAD.
     # ============================================================
 
-    def get_emu_repository_url():
+    def get_remote_head(
+        repo_url,
+        description
+    ):
+        """Ermittelt den exakten refs/heads/master-Commit direkt vom Server."""
+        log(f"[GIT] Ermittle exakten {description} master-HEAD vom Server...")
 
-        repo_url = None
+        git_executable = find_git_executable()
+        if not git_executable:
+            raise RuntimeError(tr("git_missing", "Git wurde nicht gefunden.", "Git was not found."))
 
-        # --------------------------------------------------------
-        # Primär: GUI-Instanz
-        # --------------------------------------------------------
+        result = subprocess.run(
+            [git_executable, "ls-remote", "--exit-code", str(repo_url).strip(), "refs/heads/master"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=1200
+        )
+        stdout=(result.stdout or "").strip()
+        stderr=(result.stderr or "").strip()
+        if result.returncode != 0:
+            raise RuntimeError(stderr or stdout or f"Remote-Master von {description} konnte nicht ermittelt werden.")
 
+        remote_head=""
+        for line in stdout.splitlines():
+            parts=line.strip().split()
+            if len(parts)>=2 and parts[1]=="refs/heads/master":
+                remote_head=parts[0]
+                break
+        if not remote_head:
+            raise RuntimeError(f"{description}: git ls-remote lieferte keinen refs/heads/master-Commit.")
+        if len(remote_head) not in (40,64) or not re.fullmatch(r"[0-9a-fA-F]+", remote_head):
+            raise RuntimeError(f"{description}: ungültige Remote-Master-ID: {remote_head}")
+        remote_head=remote_head.lower()
+        log(f"[GIT] {description} refs/heads/master:")
+        log(f"      {remote_head}")
+        return remote_head
+
+    def get_emu_repository_config():
+        """Liest die im GitHub-Konfigurationsdialog gewählte Emu-URL und den Branch."""
+        repo_url = ""
+        branch = "master"
+
+        try:
+            cfg = load_github_config()
+            repo_url = str(cfg.get("emu_repo_url", "") or "").strip()
+            branch = str(cfg.get("emu_branch", "master") or "master").strip() or "master"
+        except Exception:
+            pass
+
+        # Eine im Tool gerade ausgewählte Repo-URL hat IMMER Vorrang
+        # vor einer älteren gespeicherten Konfiguration.
         if gui_instance is not None:
-
             try:
-
-                repo_url = getattr(
-                    gui_instance,
-                    "EMUREPO",
-                    None
-                )
-
+                value = str(getattr(gui_instance, "selected_emu_repo_url", "") or "").strip()
+                if value:
+                    repo_url = value
             except Exception:
-                repo_url = None
-
-        # --------------------------------------------------------
-        # Fallback: globale Variable
-        # --------------------------------------------------------
-
-        if not repo_url:
-
+                pass
             try:
-
-                repo_url = globals().get(
-                    "EMUREPO",
-                    None
-                )
-
+                value = str(getattr(gui_instance, "EMUREPO", "") or "").strip()
+                if value:
+                    repo_url = value
             except Exception:
-                repo_url = None
+                pass
+            try:
+                value = str(getattr(gui_instance, "selected_emu_repo_branch", "") or "").strip()
+                if value:
+                    branch = value
+            except Exception:
+                pass
 
-        # --------------------------------------------------------
-        # Letzter Fallback
-        # --------------------------------------------------------
+        selected_global = str(globals().get("SELECTED_EMU_REPO_URL", "") or "").strip()
+        if selected_global:
+            repo_url = selected_global
 
         if not repo_url:
-
-            repo_url = globals().get(
-                "EMUREPO_URL",
-                None
-            )
+            repo_url = str(globals().get("EMUREPO_URL", "") or "").strip()
 
         if not repo_url:
-
             raise RuntimeError(
                 tr(
                     "emu_repo_url_missing",
-                    "Keine OSCam-Emu Repository-URL gesetzt.",
-                    "No OSCam-Emu repository URL configured."
+                    "Keine OSCam-Emu Repository-URL gesetzt. Bitte im GitHub-Konfigurationsdialog eintragen.",
+                    "No OSCam-Emu repository URL configured. Set it in the GitHub configuration dialog."
                 )
             )
 
-        repo_url = str(
-            repo_url
-        ).strip()
+        return repo_url, branch
 
-        if not repo_url:
-
-            raise RuntimeError(
-                tr(
-                    "emu_repo_url_empty",
-                    "Die OSCam-Emu Repository-URL ist leer.",
-                    "The OSCam-Emu repository URL is empty."
-                )
-            )
-
-        return repo_url
+    def get_emu_repository_url():
+        return get_emu_repository_config()[0]
 
     # ============================================================
     # Remote URL synchronisieren
@@ -7653,11 +7739,10 @@ def create_patch(
         )
 
     # ============================================================
-    # Streamboard-Commit in EMU-Repository verfügbar machen
+    # Exakten Streamboard-Commit in EMU-Repository verfügbar machen
     #
-    # WICHTIG:
     # Kein Merge!
-    # Die Repositories haben unabhängige Historien.
+    # Nur das Commit-Objekt wird geholt.
     # ============================================================
 
     def import_streamboard_commit(
@@ -7738,21 +7823,22 @@ def create_patch(
             )
 
         # --------------------------------------------------------
-        # Nur HEAD holen.
-        #
-        # Kein Merge!
+        # Exakten HEAD holen
         # --------------------------------------------------------
 
         log(
-            "[GIT] Hole Streamboard HEAD "
+            "[GIT] Hole exakt den benötigten Streamboard Commit "
             "ins OSCam-Emu Repository..."
         )
 
+        # WICHTIG: Nicht nur HEAD holen. Bei einer manuell
+        # ausgewählten älteren Streamboard-Revision muss genau
+        # diese SHA als Git-Objekt im EMU-Repository vorhanden sein.
         run_git(
             [
                 "fetch",
                 remote_name,
-                "HEAD"
+                stream_commit
             ],
             cwd=emu_dir,
             check=True,
@@ -7774,14 +7860,11 @@ def create_patch(
             timeout=60
         )
 
-        if available is None:
-            raise RuntimeError(
-                "Streamboard Commit konnte im "
-                "OSCam-Emu Repository nicht gefunden werden."
-            )
+        # cat-file liefert bei Erfolg normalerweise
+        # keinen Text.
+        #
+        # Deshalb wird zusätzlich rev-parse verwendet.
 
-        # cat-file liefert bei Erfolg normalerweise leer.
-        # Deshalb separat mit rev-parse prüfen.
         resolved = run_git(
             [
                 "rev-parse",
@@ -7793,13 +7876,99 @@ def create_patch(
             timeout=60
         ).strip()
 
+        if not resolved:
+
+            raise RuntimeError(
+                "Streamboard Commit konnte im "
+                "OSCam-Emu Repository nicht gefunden werden.\n"
+                f"Erwartet: {stream_commit}"
+            )
+
         if resolved != stream_commit:
 
             raise RuntimeError(
                 "Streamboard Commit wurde nicht korrekt importiert:\n"
                 f"Erwartet: {stream_commit}\n"
-                f"Gefunden: {resolved or '<nicht gefunden>'}"
+                f"Gefunden: {resolved}"
             )
+
+    # ============================================================
+    # OSCam-Emu Metadaten an die tatsächlich ausgewählte Repo-URL
+    # anpassen. Dadurch zeigt globals.h im erzeugten Patch wirklich
+    # auf das Repo, das im Tool über "Repo URL" ausgewählt wurde.
+    # ============================================================
+
+    def normalize_emu_metadata(repo_dir, repo_url):
+        import re
+
+        globals_file = os.path.join(repo_dir, "globals.h")
+        if not os.path.isfile(globals_file):
+            return False
+
+        raw_url = str(repo_url or "").strip()
+        if not raw_url:
+            return False
+
+        canonical = raw_url[:-4] if raw_url.lower().endswith(".git") else raw_url
+        canonical = canonical.rstrip("/")
+
+        # Bei GitHub ist die Discussions-URL eindeutig aus der gewählten
+        # Repository-URL ableitbar. Für andere Hosts bleibt BOARD_URL
+        # unverändert, sofern sie nicht bereits auf dieses Repo zeigt.
+        board_url = None
+        m = re.match(r"^(https?://github\.com/[^/]+/[^/]+)(?:/)?$", canonical, re.I)
+        if m:
+            board_url = m.group(1) + "/discussions"
+
+        try:
+            with open(globals_file, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except Exception:
+            return False
+
+        original = content
+        content = re.sub(
+            r'(#define\s+SCM_URL\s+)"[^"]*"',
+            lambda m: m.group(1) + '"' + canonical + '"',
+            content,
+            count=1,
+        )
+
+        if board_url:
+            content = re.sub(
+                r'(#define\s+BOARD_URL\s+)"[^"]*"',
+                lambda m: m.group(1) + '"' + board_url + '"',
+                content,
+                count=1,
+            )
+
+        if content != original:
+            with open(globals_file, "w", encoding="utf-8", newline="") as f:
+                f.write(content)
+            log("[EMU] globals.h auf die ausgewählte Repo-URL synchronisiert:")
+            log(f"      SCM_URL  = {canonical}")
+            if board_url:
+                log(f"      BOARD_URL = {board_url}")
+            return True
+
+        return False
+
+    def prepare_validation_target(repo_dir, emu_commit, repo_url):
+        temp_dir = tempfile.mkdtemp(prefix="oscam_patch_expected_")
+        run_git(
+            ["worktree", "add", "--detach", temp_dir, emu_commit],
+            cwd=repo_dir, check=True, timeout=1200
+        )
+        try:
+            normalize_emu_metadata(temp_dir, repo_url)
+            return temp_dir
+        except Exception:
+            try:
+                run_git(["worktree", "remove", "--force", temp_dir], cwd=repo_dir, check=False, timeout=1200)
+            except Exception:
+                pass
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
 
     # ============================================================
     # Patch validieren
@@ -7834,8 +8003,8 @@ def create_patch(
     # ============================================================
     # Patch gegen Zielzustand validieren
     #
-    # .github und .gitlab werden bewusst nicht verglichen,
-    # weil diese Pfade vom Patch ausgeschlossen werden.
+    # Streamboard Worktree wird exakt auf den
+    # REMOTE-HEAD-Commit gesetzt.
     # ============================================================
 
     def validate_applied_patch(
@@ -7843,7 +8012,8 @@ def create_patch(
         stream_commit,
         emu_repo_dir,
         emu_commit,
-        patch_file
+        patch_file,
+        emu_repo_url=None
     ):
 
         temp_worktree = None
@@ -7903,36 +8073,62 @@ def create_patch(
             )
 
             # ----------------------------------------------------
-            # Zielzustand vergleichen.
-            #
-            # .github/** und .gitlab/** werden absichtlich
-            # ausgeschlossen.
+            # Erwarteten Zielzustand aus dem ausgewählten OSCam-Emu-
+            # Repository aufbauen. globals.h wird dabei genauso auf
+            # die ausgewählte Repo-URL synchronisiert wie beim Patch.
             # ----------------------------------------------------
 
-            differences = run_git(
-                [
-                    "diff",
-                    "--cached",
-                    "--name-status",
-                    emu_commit,
-                    "--",
-                    ".",
-                    ":(exclude).github/**",
-                    ":(exclude).gitlab/**"
-                ],
-                cwd=temp_worktree,
-                check=True,
-                timeout=1200
-            ).strip()
+            expected_worktree = prepare_validation_target(
+                emu_repo_dir,
+                emu_commit,
+                emu_repo_url
+            )
 
-            if differences:
+            try:
+                run_git(["add", "-A"], cwd=temp_worktree, check=True, timeout=1200)
+                run_git(["add", "-A"], cwd=expected_worktree, check=True, timeout=1200)
 
-                raise RuntimeError(
-                    "Der angewendete Patch entspricht nicht "
-                    "dem erwarteten OSCam-Emu-Zielzustand.\n\n"
-                    "Abweichungen:\n"
-                    + differences
-                )
+                differences = run_git(
+                    [
+                        "diff", "--cached", "--name-status",
+                        "--no-renames",
+                        "--", ".",
+                        ":(exclude).github/**",
+                        ":(exclude).gitlab/**"
+                    ],
+                    cwd=temp_worktree, check=True, timeout=1200
+                ).strip()
+
+                expected_diff = run_git(
+                    [
+                        "diff", "--cached", "--name-status",
+                        "--no-renames",
+                        "--", ".",
+                        ":(exclude).github/**",
+                        ":(exclude).gitlab/**"
+                    ],
+                    cwd=expected_worktree, check=True, timeout=1200
+                ).strip()
+
+                # Robuster Vergleich über den vollständigen Tree.
+                tree_a = run_git(["write-tree"], cwd=temp_worktree, check=True, timeout=1200).strip()
+                tree_b = run_git(["write-tree"], cwd=expected_worktree, check=True, timeout=1200).strip()
+
+                if tree_a != tree_b:
+                    raise RuntimeError(
+                        "Der angewendete Patch entspricht nicht dem "
+                        "erwarteten OSCam-Emu-Zielzustand.\n\n"
+                        f"Patch-Tree:    {tree_a}\n"
+                        f"Erwarteter Tree: {tree_b}\n"
+                        f"Patch-Status: {differences or '<keine>'}\n"
+                        f"Soll-Status:  {expected_diff or '<keine>'}"
+                    )
+            finally:
+                try:
+                    run_git(["worktree", "remove", "--force", expected_worktree], cwd=emu_repo_dir, check=False, timeout=1200)
+                except Exception:
+                    pass
+                shutil.rmtree(expected_worktree, ignore_errors=True)
 
             log(
                 "[PATCH] Zielzustand nach Patch: OK"
@@ -8090,18 +8286,31 @@ def create_patch(
         # EMU URL aus GUI holen
         # ========================================================
 
-        emu_repo_url = (
-            get_emu_repository_url()
+        emu_repo_url, emu_repo_branch = get_emu_repository_config()
+
+        if gui_instance is not None:
+            try:
+                gui_instance.selected_emu_repo_url = emu_repo_url
+                gui_instance.selected_emu_repo_branch = emu_repo_branch
+            except Exception:
+                pass
+
+        log("[GIT] Ausgewählte OSCam-Emu Repository-URL:")
+        log(f"       {emu_repo_url}")
+        log(f"[GIT] Ausgewählter OSCam-Emu Branch: {emu_repo_branch}")
+
+        # ========================================================
+        # Streamboard Repository URL
+        # ========================================================
+
+        stream_url = globals().get(
+            "STREAMREPO_URL",
+            "https://git.streamboard.tv/common/oscam.git"
         )
 
-        log(
-            "[GIT] Ausgewählte "
-            "OSCam-Emu Repository-URL:"
-        )
-
-        log(
-            f"       {emu_repo_url}"
-        )
+        stream_url = str(
+            stream_url
+        ).strip()
 
         # ========================================================
         # Streamboard Repository
@@ -8118,11 +8327,6 @@ def create_patch(
         if not os.path.isdir(
             stream_dir
         ):
-
-            stream_url = globals().get(
-                "STREAMREPO_URL",
-                "https://git.streamboard.tv/common/oscam.git"
-            )
 
             log(
                 "[GIT] Streamboard Repository fehlt – klone..."
@@ -8150,32 +8354,210 @@ def create_patch(
         )
 
         # ========================================================
-        # Streamboard aktualisieren
+        # Streamboard-Basis bestimmen
+        #
+        # Wenn der Benutzer über "Streamboard Revision" einen
+        # Commit ausgewählt hat, wird EXAKT dieser Commit verwendet.
+        # Andernfalls wird weiterhin der echte Remote-HEAD verwendet.
+        #
+        # WICHTIG:
+        # Bei einer manuellen Auswahl darf update_repository() NICHT
+        # aufgerufen werden, weil es die Auswahl wieder überschreiben
+        # würde.
         # ========================================================
 
-        update_repository(
-            stream_dir,
-            "Streamboard"
-        )
+        selected_stream_commit = getattr(
+            gui_instance,
+            "selected_streamboard_commit",
+            None
+        ) if gui_instance is not None else None
 
-        stream_commit = get_head(
-            stream_dir
-        )
+        if not selected_stream_commit:
+            selected_stream_commit = globals().get(
+                "SELECTED_STREAMBOARD_COMMIT"
+            )
 
-        log(
-            "[STREAMBOARD] Commit:"
-        )
+        selected_stream_commit = str(
+            selected_stream_commit or ""
+        ).strip().lower()
 
-        log(
-            f"             {stream_commit}"
-        )
+        if selected_stream_commit:
+
+            if not re.fullmatch(
+                r"[0-9a-f]{40}",
+                selected_stream_commit
+            ):
+                raise RuntimeError(
+                    "Die ausgewählte Streamboard-Revision ist keine "
+                    "gültige 40-stellige Git-SHA."
+                )
+
+            stream_commit = selected_stream_commit
+
+            log(
+                "[STREAMBOARD] Manuell ausgewählte Basis-Revision:"
+            )
+
+            log(
+                f"             {stream_commit}"
+            )
+
+            # Exakten Commit lokal sicherstellen.
+            local_stream_commit = run_git(
+                [
+                    "rev-parse",
+                    "--verify",
+                    stream_commit + "^{commit}"
+                ],
+                cwd=stream_dir,
+                check=False,
+                timeout=60
+            ).strip()
+
+            if local_stream_commit != stream_commit:
+
+                log(
+                    "[GIT] Ausgewählte Revision ist lokal noch nicht "
+                    "vorhanden – hole sie direkt von Streamboard."
+                )
+
+                run_git(
+                    [
+                        "fetch",
+                        stream_url,
+                        stream_commit
+                    ],
+                    cwd=stream_dir,
+                    check=True,
+                    timeout=1200
+                )
+
+                local_stream_commit = run_git(
+                    [
+                        "rev-parse",
+                        "--verify",
+                        stream_commit + "^{commit}"
+                    ],
+                    cwd=stream_dir,
+                    check=False,
+                    timeout=60
+                ).strip()
+
+            if local_stream_commit != stream_commit:
+                raise RuntimeError(
+                    "Die ausgewählte Streamboard-Revision konnte "
+                    "nicht lokal bereitgestellt werden.\n"
+                    f"Auswahl: {stream_commit}\n"
+                    f"Lokal:   {local_stream_commit or '<nicht gefunden>'}"
+                )
+
+            # Sicherstellen, dass der ausgewählte Zustand weiterhin
+            # ausgecheckt ist. Es wird KEIN reset --hard und KEIN clean
+            # ausgeführt.
+            checked_out = run_git(
+                [
+                    "rev-parse",
+                    "HEAD"
+                ],
+                cwd=stream_dir,
+                check=False,
+                timeout=60
+            ).strip()
+
+            if checked_out != stream_commit:
+                run_git(
+                    [
+                        "checkout",
+                        "--detach",
+                        stream_commit
+                    ],
+                    cwd=stream_dir,
+                    check=True,
+                    timeout=1200
+                )
+
+            log(
+                "[STREAMBOARD] Verwende ausgewählten Commit als "
+                "Patch-Basis – kein Remote-HEAD-Fallback."
+            )
+
+        else:
+
+            # Keine manuelle Auswahl: den echten Streamboard Remote-HEAD
+            # direkt vom Server ermitteln.
+            update_repository(
+                stream_dir,
+                "Streamboard"
+            )
+
+            stream_commit = get_remote_head(
+                stream_url,
+                "Streamboard"
+            )
+
+            log(
+                "[STREAMBOARD] Exakter Remote-HEAD:"
+            )
+
+            log(
+                f"             {stream_commit}"
+            )
+
+            local_stream_commit = run_git(
+                [
+                    "rev-parse",
+                    "--verify",
+                    stream_commit + "^{commit}"
+                ],
+                cwd=stream_dir,
+                check=False,
+                timeout=60
+            ).strip()
+
+            if local_stream_commit != stream_commit:
+
+                log(
+                    "[GIT] Exakter Streamboard Remote-HEAD "
+                    "ist lokal noch nicht vorhanden."
+                )
+
+                run_git(
+                    [
+                        "fetch",
+                        stream_url,
+                        stream_commit
+                    ],
+                    cwd=stream_dir,
+                    check=True,
+                    timeout=1200
+                )
+
+                local_stream_commit = run_git(
+                    [
+                        "rev-parse",
+                        "--verify",
+                        stream_commit + "^{commit}"
+                    ],
+                    cwd=stream_dir,
+                    check=False,
+                    timeout=60
+                ).strip()
+
+            if local_stream_commit != stream_commit:
+
+                raise RuntimeError(
+                    "Der exakte Streamboard Remote-HEAD "
+                    "konnte nicht lokal bereitgestellt werden.\n"
+                    f"Remote-HEAD: {stream_commit}\n"
+                    f"Lokal:       {local_stream_commit or '<nicht gefunden>'}"
+                )
 
         set_progress(
             25,
             tr(
                 "stream_updated",
-                "Streamboard aktualisiert – %p%",
-                "Streamboard updated – %p%"
+                "Streamboard-Basis bereit – %p%",
+                "Streamboard base ready – %p%"
             )
         )
 
@@ -8216,9 +8598,7 @@ def create_patch(
         )
 
         # --------------------------------------------------------
-        # WICHTIG:
-        # Auch bei bestehendem Repository die URL aus der GUI
-        # übernehmen.
+        # URL aus GUI übernehmen
         # --------------------------------------------------------
 
         sync_emu_origin(
@@ -8239,13 +8619,9 @@ def create_patch(
         # OSCam-Emu aktualisieren
         # ========================================================
 
-        update_repository(
+        emu_commit = update_emu_repository(
             emu_dir,
-            "OSCam-Emu"
-        )
-
-        emu_commit = get_head(
-            emu_dir
+            emu_repo_branch
         )
 
         log(
@@ -8255,6 +8631,11 @@ def create_patch(
         log(
             f"             {emu_commit}"
         )
+
+        # Der Patch soll in globals.h exakt die im Tool ausgewählte
+        # OSCam-Emu-Repo-URL zeigen, nicht eine alte URL, die zufällig
+        # im Quell-Repository hinterlegt ist.
+        normalize_emu_metadata(emu_dir, emu_repo_url)
 
         set_progress(
             40,
@@ -8319,11 +8700,12 @@ def create_patch(
                 )
 
         # ========================================================
-        # Streamboard Commit in EMU-Repo verfügbar machen
+        # Exakten Streamboard Commit im EMU-Repo verfügbar machen
         # ========================================================
 
         log(
-            "[GIT] Importiere Streamboard Commit "
+            "[GIT] Importiere exakt den ermittelten "
+            "Streamboard Remote-HEAD "
             "in das OSCam-Emu Repository..."
         )
 
@@ -8336,8 +8718,8 @@ def create_patch(
             50,
             tr(
                 "stream_commit_imported",
-                "Streamboard Commit verfügbar – %p%",
-                "Streamboard commit available – %p%"
+                "Exakter Streamboard Commit verfügbar – %p%",
+                "Exact Streamboard commit available – %p%"
             )
         )
 
@@ -8370,7 +8752,10 @@ def create_patch(
         if stream_commit_verified != stream_commit:
 
             raise RuntimeError(
-                "Streamboard Commit konnte nicht verifiziert werden."
+                "Streamboard Commit konnte nicht "
+                "exakt verifiziert werden.\n"
+                f"Erwartet: {stream_commit}\n"
+                f"Gefunden: {stream_commit_verified}"
             )
 
         if emu_commit_verified != emu_commit:
@@ -8380,16 +8765,43 @@ def create_patch(
             )
 
         # ========================================================
+        # WICHTIGE ZUSATZPRÜFUNG
+        #
+        # Sicherstellen, dass der Commit im Streamboard-Repository
+        # und im EMU-Repository identisch ist.
+        # ========================================================
+
+        stream_commit_in_stream_repo = run_git(
+            [
+                "rev-parse",
+                "--verify",
+                stream_commit + "^{commit}"
+            ],
+            cwd=stream_dir,
+            check=True,
+            timeout=60
+        ).strip()
+
+        if stream_commit_in_stream_repo != stream_commit:
+
+            raise RuntimeError(
+                "Streamboard Commit stimmt im lokalen "
+                "Streamboard Repository nicht mit dem "
+                "ermittelten Remote-HEAD überein.\n"
+                f"Remote-HEAD: {stream_commit}\n"
+                f"Lokal:       {stream_commit_in_stream_repo}"
+            )
+
+        # ========================================================
         # Patch erzeugen
         #
-        # WICHTIG:
-        # --binary
-        #   erzeugt echte Binär-Patchdaten
+        # Basis:
+        #     EXAKTER Streamboard Remote-HEAD
         #
-        # --full-index
-        #   vollständige Blob-IDs
+        # Ziel:
+        #     EXAKTER OSCam-Emu HEAD
         #
-        # KEIN Merge!
+        # Kein Merge!
         # ========================================================
 
         log(
@@ -8426,7 +8838,7 @@ def create_patch(
                     "--binary",
                     "--full-index",
                     stream_commit,
-                    emu_commit
+                    "--"
                 ],
                 cwd=emu_dir,
                 stdout=patch_output,
@@ -8516,18 +8928,22 @@ def create_patch(
 
                 try:
 
-                    patch_header = (
-                        header_function()
+                    patch_header = header_function(
+                        streamboard_repo=stream_dir,
+                        emu_repo=emu_dir,
+                        lang=getattr(gui_instance, "LANG", "de") if gui_instance is not None else "de",
+                        modifier=PATCH_MODIFIER,
+                        streamboard_commit=stream_commit
                     )
 
                 except TypeError:
 
                     try:
 
-                        patch_header = (
-                            header_function(
-                                gui_instance
-                            )
+                        patch_header = header_function(
+                            streamboard_repo=stream_dir,
+                            emu_repo=emu_dir,
+                            streamboard_commit=stream_commit
                         )
 
                     except Exception:
@@ -8560,7 +8976,7 @@ def create_patch(
         )
 
         # --------------------------------------------------------
-        # Commit-Information anhängen
+        # Exakte Commit-Information anhängen
         # --------------------------------------------------------
 
         patch_header += (
@@ -8569,6 +8985,12 @@ def create_patch(
             + stream_commit
             + "\npatch target commit: "
             + emu_commit
+            + "\npatch streamboard url: "
+            + stream_url
+            + "\npatch emu repository url: "
+            + emu_repo_url
+            + "\npatch emu branch: "
+            + emu_repo_branch
         )
 
         # ========================================================
@@ -8635,11 +9057,15 @@ def create_patch(
         # ========================================================
         # Vollständige Zustandsprüfung
         #
-        # Hier wird der Patch tatsächlich auf einen
-        # Streamboard-Worktree angewendet und anschließend mit
-        # dem OSCam-Emu Zielzustand verglichen.
+        # Der Patch muss:
         #
-        # .github/** und .gitlab/** sind absichtlich ausgenommen.
+        # Streamboard Remote-HEAD
+        #          +
+        #          Patch
+        #          =
+        # OSCam-Emu HEAD
+        #
+        # ergeben.
         # ========================================================
 
         log(
@@ -8652,7 +9078,8 @@ def create_patch(
             stream_commit,
             emu_dir,
             emu_commit,
-            patch_file
+            patch_file,
+            emu_repo_url
         )
 
         set_progress(
@@ -8677,26 +9104,29 @@ def create_patch(
         # ========================================================
 
         log("")
+
         log(
             "========================================"
         )
+
         log(
             "PATCH ERFOLGREICH ERZEUGT"
         )
+
         log(
             "========================================"
         )
 
         log(
-            f"Streamboard Commit: {stream_commit}"
+            f"Streamboard Remote-HEAD: {stream_commit}"
         )
 
         log(
-            f"OSCam-Emu Commit:   {emu_commit}"
+            f"OSCam-Emu Commit:        {emu_commit}"
         )
 
         log(
-            f"OSCam-Emu URL:      {emu_repo_url}"
+            f"OSCam-Emu URL:           {emu_repo_url}"
         )
 
         log(
@@ -8768,12 +9198,15 @@ def create_patch(
             )
 
         log("")
+
         log(
             "========================================"
         )
+
         log(
             "PATCH FEHLER"
         )
+
         log(
             "========================================"
         )
@@ -8859,10 +9292,8 @@ def create_patch(
 
         return False
 
-
-
-
 # ===================== backup_old_patch =====================
+
 def backup_old_patch(
     self,
     make_backup=True,
@@ -9749,10 +10180,6 @@ def backup_old_patch(
 
     return True
 
-
-
-  
-
 def add_patch_header(
     patch_file,
     streamboard_repo,
@@ -10036,8 +10463,6 @@ def add_patch_header(
         f.write(patch_content)
 
     return header.strip()
-
-
 
 def patch_oscam_emu_git(
     gui_instance=None,
@@ -11457,14 +11882,7 @@ def patch_oscam_emu_git(
 
         return False
 
-
-
-
-
-
-
-
-
+# PatchManagerGUI
 class PatchManagerGUI(QWidget):
     def __init__(self):
         # 1. IMPORTS & INITIALER SCHUTZ
@@ -12205,7 +12623,6 @@ class PatchManagerGUI(QWidget):
 
         QApplication.processEvents()
     
-
     def show_commits(self, info_widget=None, progress_callback=None, num_commits=None):
         """
         Zeigt die letzten Commits an.
@@ -12936,8 +13353,6 @@ class PatchManagerGUI(QWidget):
                         "warning",
                     )
 
-
-
     # ===================== OSCam-EMU BUTTON WRAPPERS =====================
     
     def oscam_emu_git_clear(self, info_widget=None, progress_callback=None):
@@ -13253,7 +13668,6 @@ class PatchManagerGUI(QWidget):
         except Exception as e:
             print(f"[_fit_button_text] Visueller Fehler blockiert: {e}")
 
-
     def fix_all_tool_permissions(self, **kwargs):
         """Setzt rekursiv Schreibrechte mit ProgressBar, Sound und Sprachprüfung."""
         import os
@@ -13452,13 +13866,11 @@ class PatchManagerGUI(QWidget):
         print("[AUTO-DETECT] NCam konnte nicht gefunden werden.")
         return False
 
-
     # ========================== SimpleBuild 4 ==========================
     import os
     import platform
     import shutil
 
-    
     def auto_detect_s3_path(self):
         """Sucht S3 Installation automatisch auf Linux & Windows."""
         is_win = platform.system() == "Windows"
@@ -13589,7 +14001,6 @@ class PatchManagerGUI(QWidget):
         else:
             QMessageBox.warning(self, "Error", t["err"])
 
-
     def start_ncam_install(self):
         """Startet die NCam Installation."""
         from PyQt6.QtWidgets import QFileDialog
@@ -13624,8 +14035,6 @@ class PatchManagerGUI(QWidget):
             self.ncam_worker.start()
         except Exception as e:
             self.on_ncam_finished(False, f"Fehler beim Erstellen des Ordners: {str(e)}")
-
-
 
     def on_ncam_finished(self, success, message):
         """Nach Abschluss des Workers für NCam."""
@@ -13762,10 +14171,6 @@ class PatchManagerGUI(QWidget):
         else:
             QMessageBox.warning(self, t["err_title"], t["err_msg"])
 
-
-
-
-
     def start_s4_install(self):
         """Startet die SimpleBuild 4 Installation über Worker, Pfad wählbar und OS-optimiert."""
         import os, platform
@@ -13834,8 +14239,6 @@ class PatchManagerGUI(QWidget):
         self.s4_worker = S4InstallWorker(self.S4_PATH)
         self.s4_worker.finished_signal.connect(self.on_s4_finished)
         self.s4_worker.start()
-
-
 
     def on_s4_finished(self, success, message):
         """Nach Abschluss des Workers für SimpleBuild 4."""
@@ -15951,7 +16354,6 @@ class PatchManagerGUI(QWidget):
 
     # --- Hilfsfunktionen innerhalb der Klasse ---
 
-   
     def get_local_revision(self):
         """
         Liefert die aktuelle OSCam-Revision.
@@ -16094,7 +16496,6 @@ class PatchManagerGUI(QWidget):
         # ============================================================
 
         return "?"
-
 
     def get_latest_remote_revision(self):
         """
@@ -16274,7 +16675,6 @@ class PatchManagerGUI(QWidget):
 
         return None
 
-
     def save_local_revision(self, revision):
         """
         Speichert die aktuelle OSCam-Revision in:
@@ -16336,8 +16736,6 @@ class PatchManagerGUI(QWidget):
             print(
                 f"Fehler beim Speichern der Revision: {e}"
             )
-
-
 
     def start_oscam_update_check(self):
         """Wird aufgerufen, um den Vergleich zu starten."""
@@ -17140,10 +17538,6 @@ class PatchManagerGUI(QWidget):
         except Exception as e:
             print(f"[change_colors] Button-Text-Anpassung fehlgeschlagen: {e}")
 
-
-
-
-
     def log_message(self, message):
         """Zentrale Funktion: Zeit in ROT, Inhalt in CYAN - sauber untereinander."""
         from datetime import datetime
@@ -17355,540 +17749,67 @@ class PatchManagerGUI(QWidget):
                 self.plugin_update_action(latest_version=latest_version)
 
     def change_emu_repo(self):
-        """Repository-Auswahl mit Regenbogen-Progress, Sound und DE/EN Support."""
-
-        from PyQt6.QtWidgets import (
-            QInputDialog,
-            QApplication
-        )
+        """Wählt das OSCam-Emu-Git-Repository für die nächste Patch-Erstellung."""
+        from PyQt6.QtWidgets import QInputDialog, QApplication, QMessageBox
         from PyQt6.QtCore import QTimer
+        import re
 
-        # ============================================================
-        # Final-Label ausblenden
-        # ============================================================
-
-        if hasattr(self, "hide_final_label"):
-            self.hide_final_label()
-
-        elif hasattr(self, "final_label") and self.final_label:
-            self.final_label.hide()
-
-        # ============================================================
-        # Repository-Auswahl
-        # ============================================================
-
-        REPO_1 = "https://github.com/oscam-mirror/oscam-emu.git"
-        REPO_2 = "https://github.com/speedy005/Oscam-emu.git"
-
-        REPO_OPTIONS = [
-            REPO_1,
-            REPO_2
+        presets=[
+            "https://github.com/oscam-mirror/oscam-emu.git",
+            "https://github.com/speedy005/Oscam-emu.git",
         ]
+        current=str(getattr(self,"EMUREPO",None) or globals().get("EMUREPO",presets[0])).strip()
+        if current and current not in presets:
+            presets.insert(0,current)
 
-        # Aktuelle Repo ermitteln
-        current_repo = getattr(
-            self,
-            "EMUREPO",
-            None
-        )
+        is_de=str(getattr(self,"LANG","de")).lower()[:2]=="de"
+        dialog=QInputDialog(self)
+        dialog.setWindowTitle("OSCam-Emu Git auswählen" if is_de else "Select OSCam-Emu Git")
+        dialog.setLabelText("Repository-URL auswählen oder eigene Git-URL eingeben:" if is_de else "Select a repository URL or enter your own Git URL:")
+        dialog.setComboBoxItems(presets)
+        dialog.setComboBoxEditable(True)
+        dialog.setTextValue(current or presets[0])
+        dialog.setOkButtonText("Übernehmen" if is_de else "Apply")
+        dialog.setCancelButtonText("Abbrechen" if is_de else "Cancel")
 
-        if not current_repo:
-            current_repo = globals().get(
-                "EMUREPO",
-                REPO_1
-            )
+        if not dialog.exec():
+            return False
+        new_url=(dialog.textValue() or "").strip()
+        valid=bool(re.match(r"^(https?://|ssh://|git@|file://|/|[A-Za-z]:[\\/])",new_url))
+        if not valid:
+            QMessageBox.warning(self,"OSCam-Emu Git",
+                "Bitte eine gültige Git-Repository-URL eingeben." if is_de else
+                "Please enter a valid Git repository URL.")
+            return False
 
-        if current_repo not in REPO_OPTIONS:
-            current_repo = REPO_1
+        # Die Auswahl sofort als aktive Patch-Quelle merken.
+        # create_patch() darf hier NICHT wieder auf eine alte
+        # emu_repo_url aus der geladenen Config zurückfallen.
+        self.EMUREPO = new_url
+        self.selected_emu_repo_url = new_url
+        self.selected_emu_repo_branch = str(
+            getattr(self, "selected_emu_repo_branch", "master") or "master"
+        ).strip() or "master"
+        globals()["EMUREPO"] = new_url
+        globals()["SELECTED_EMU_REPO_URL"] = new_url
+        globals()["SELECTED_EMU_REPO_BRANCH"] = self.selected_emu_repo_branch
+        if hasattr(self,"cfg"):
+            self.cfg["EMUREPO"]=new_url
+            self.cfg["emu_repo_url"]=new_url
+            saver=globals().get("save_config")
+            if callable(saver):
+                saver(self.cfg,gui_instance=self)
 
-        # Sprache
-        lang = str(
-            getattr(
-                self,
-                "LANG",
-                "de"
-            )
-        ).lower()[:2]
-
-        is_de = lang == "de"
-
-        pbar = getattr(
-            self,
-            "progress_bar",
-            None
-        )
-
-        # ============================================================
-        # Texte
-        # ============================================================
-
-        T_TITLE = (
-            "Repository Auswahl"
-            if is_de
-            else
-            "Repository Selection"
-        )
-
-        T_LABEL = (
-            "Wähle die gewünschte Repo-URL:"
-            if is_de
-            else
-            "Select Repo-URL:"
-        )
-
-        T_SAVING = (
-            "Speichere Repo..."
-            if is_de
-            else
-            "Saving Repo..."
-        )
-
-        T_DONE = (
-            "Repo geändert!"
-            if is_de
-            else
-            "Repo changed!"
-        )
-
-        T_CANCEL = (
-            "Abgebrochen"
-            if is_de
-            else
-            "Cancelled"
-        )
-
-        T_ERROR = (
-            "Fehler beim Speichern der Repo:"
-            if is_de
-            else
-            "Error while saving repository:"
-        )
-
-        # ============================================================
-        # Progress-Bar zurücksetzen
-        # ============================================================
-
-        def restore_style():
-
-            if not pbar:
-                return
-
-            try:
-
-                pbar.setValue(0)
-
-                pbar.setFormat(
-                    "%p%"
-                )
-
-                pbar.setStyleSheet(
-                    """
-                    QProgressBar {
-                        border: 1px solid #444;
-                        border-radius: 8px;
-                        background-color: #1A1A1A;
-                        color: white;
-                        text-align: center;
-                        font-weight: bold;
-                    }
-
-                    QProgressBar::chunk {
-                        background-color: qlineargradient(
-                            x1:0,
-                            y1:0,
-                            x2:1,
-                            y2:0,
-                            stop:0 #F37804,
-                            stop:1 #FFD700
-                        );
-                        border-radius: 8px;
-                    }
-                    """
-                )
-
-            except Exception:
-                pass
-
-        # ============================================================
-        # Sound
-        # ============================================================
-
-        try:
-
-            if "safe_play" in globals():
-                safe_play(
-                    "dialog-information.oga"
-                )
-
-        except Exception:
-            pass
-
-        # ============================================================
-        # Regenbogen-Progress
-        # ============================================================
-
+        pbar=getattr(self,"progress_bar",None)
         if pbar:
-
-            rainbow = (
-                "qlineargradient("
-                "x1:0, y1:0, "
-                "x2:1, y2:0, "
-                "stop:0.0 #FF0000, "
-                "stop:0.2 #FF7F00, "
-                "stop:0.4 #FFFF00, "
-                "stop:0.6 #00FF00, "
-                "stop:0.8 #0000FF, "
-                "stop:1.0 #8B00FF"
-                ");"
-            )
-
-            pbar.setStyleSheet(
-                f"""
-                QProgressBar {{
-                    text-align: center;
-                    font-weight: 900;
-                    border: 2px solid #222;
-                    border-radius: 6px;
-                    background-color: #111;
-                    color: black;
-                    font-size: 15pt;
-                }}
-
-                QProgressBar::chunk {{
-                    background-color: {rainbow};
-                    border-radius: 4px;
-                }}
-                """
-            )
-
-            pbar.setFormat(
-                f"⚙️ {T_SAVING} %p%"
-            )
-
-            pbar.setValue(20)
+            pbar.setValue(100)
+            pbar.setFormat(("✅ OSCam-Emu Git gesetzt: %p%" if is_de else "✅ OSCam-Emu Git selected: %p%"))
             pbar.show()
-
-            QApplication.processEvents()
-
-        # ============================================================
-        # Repository-Dialog
-        # ============================================================
-
-        dialog = QInputDialog(
-            self
-        )
-
-        dialog.setWindowTitle(
-            T_TITLE
-        )
-
-        dialog.setLabelText(
-            T_LABEL
-        )
-
-        dialog.setComboBoxItems(
-            REPO_OPTIONS
-        )
-
-        dialog.setComboBoxEditable(
-            False
-        )
-
-        dialog.setTextValue(
-            current_repo
-        )
-
-        dialog.setOkButtonText(
-            "OK"
-        )
-
-        dialog.setCancelButtonText(
-            "Abbrechen"
-            if is_de
-            else
-            "Cancel"
-        )
-
-        # ============================================================
-        # Dialog ausführen
-        # ============================================================
-
-        if dialog.exec():
-
-            new_url = (
-                dialog.textValue()
-                or ""
-            ).strip()
-
-            # --------------------------------------------------------
-            # Keine gültige Auswahl
-            # --------------------------------------------------------
-
-            if not new_url:
-
-                new_url = current_repo
-
-            if new_url not in REPO_OPTIONS:
-
-                new_url = REPO_1
-
-            # --------------------------------------------------------
-            # Progress
-            # --------------------------------------------------------
-
-            if pbar:
-
-                pbar.setValue(
-                    60
-                )
-
-                pbar.setFormat(
-                    f"⚙️ {T_SAVING} %p%"
-                )
-
-                QApplication.processEvents()
-
-            # ========================================================
-            # EMUREPO aktualisieren
-            # ========================================================
-
-            try:
-
-                # Instanz
-                self.EMUREPO = new_url
-
-                # Global
-                globals()["EMUREPO"] = new_url
-
-                # ----------------------------------------------------
-                # Config aktualisieren
-                # ----------------------------------------------------
-
-                if hasattr(
-                    self,
-                    "cfg"
-                ):
-
-                    self.cfg[
-                        "EMUREPO"
-                    ] = new_url
-
-                    if "save_config" in globals():
-
-                        globals()[
-                            "save_config"
-                        ](
-                            self.cfg,
-                            gui_instance=self
-                        )
-
-                # ----------------------------------------------------
-                # Sprache aktualisieren
-                # ----------------------------------------------------
-
-                if hasattr(
-                    self,
-                    "update_language"
-                ):
-
-                    self.update_language()
-
-                # ----------------------------------------------------
-                # Sound
-                # ----------------------------------------------------
-
-                try:
-
-                    if "safe_play" in globals():
-                        safe_play(
-                            "complete.oga"
-                        )
-
-                except Exception:
-                    pass
-
-                # ----------------------------------------------------
-                # Erfolg
-                # ----------------------------------------------------
-
-                if pbar:
-
-                    pbar.setValue(
-                        100
-                    )
-
-                    pbar.setFormat(
-                        f"✅ {T_DONE}"
-                    )
-
-                    QApplication.processEvents()
-
-                # ----------------------------------------------------
-                # Nach 3 Sekunden zurücksetzen
-                # ----------------------------------------------------
-
-                QTimer.singleShot(
-                    3000,
-                    restore_style
-                )
-
-            except Exception as exc:
-
-                error_text = str(
-                    exc
-                ).strip()
-
-                if not error_text:
-                    error_text = (
-                        "Unbekannter Fehler"
-                        if is_de
-                        else
-                        "Unknown error"
-                    )
-
-                try:
-
-                    if "safe_play" in globals():
-                        safe_play(
-                            "dialog-error.oga"
-                        )
-
-                except Exception:
-                    pass
-
-                if pbar:
-
-                    pbar.setValue(
-                        0
-                    )
-
-                    pbar.setFormat(
-                        f"❌ {T_ERROR}"
-                    )
-
-                    pbar.setStyleSheet(
-                        """
-                        QProgressBar {
-                            color: red;
-                            font-weight: 900;
-                            border: 2px solid red;
-                            background: #111;
-                        }
-                        """
-                    )
-
-                    QApplication.processEvents()
-
-                # ----------------------------------------------------
-                # Fehler ins Info-Fenster
-                # ----------------------------------------------------
-
-                try:
-
-                    if hasattr(
-                        self,
-                        "append_info"
-                    ):
-
-                        self.append_info(
-                            getattr(
-                                self,
-                                "info_text",
-                                None
-                            ),
-                            f"❌ {T_ERROR}\n{error_text}",
-                            "error"
-                        )
-
-                except Exception:
-                    pass
-
-                QTimer.singleShot(
-                    4000,
-                    restore_style
-                )
-
-        # ============================================================
-        # ABBRUCH
-        # ============================================================
-
-        else:
-
-            try:
-
-                if "safe_play" in globals():
-                    safe_play(
-                        "dialog-warning.oga"
-                    )
-
-            except Exception:
-                pass
-
-            if pbar:
-
-                # ----------------------------------------------------
-                # Erst 100 %
-                # ----------------------------------------------------
-
-                pbar.setValue(
-                    100
-                )
-
-                pbar.setFormat(
-                    "100%"
-                )
-
-                pbar.repaint()
-
-                QApplication.processEvents()
-
-                # ----------------------------------------------------
-                # Abbruch anzeigen
-                # ----------------------------------------------------
-
-                def show_cancel_msg():
-
-                    try:
-
-                        pbar.setValue(
-                            0
-                        )
-
-                        pbar.setFormat(
-                            f"❌ {T_CANCEL}"
-                        )
-
-                        pbar.setStyleSheet(
-                            """
-                            QProgressBar {
-                                text-align: center;
-                                color: red;
-                                font-weight: 900;
-                                font-size: 15pt;
-                                border: 2px solid red;
-                                background: #111;
-                            }
-                            """
-                        )
-
-                        pbar.repaint()
-
-                        # ------------------------------------------------
-                        # Nach 2 Sekunden normal zurücksetzen
-                        # ------------------------------------------------
-
-                        QTimer.singleShot(
-                            2000,
-                            restore_style
-                        )
-
-                    except Exception:
-                        pass
-
-                QTimer.singleShot(
-                    400,
-                    show_cancel_msg)
-
+            QTimer.singleShot(2500,getattr(self,"pbar_idle",lambda:pbar.setValue(0)))
+        if hasattr(self,"info_text"):
+            self.info_text.append(f"<b>✅ OSCam-Emu Git:</b> {new_url}")
+            self.info_text.ensureCursorVisible()
+        return True
     def change_modifier_name(self):
         """Öffnet Autor-Dialog mit Regenbogen-Progress, Sound und DE/EN Support."""
 
@@ -19074,6 +18995,16 @@ class PatchManagerGUI(QWidget):
                 "🔓 <b>Rechte:</b> Fixiert Schreibrechte für alle Ordner/Dateien.",
                 "🔓 <b>Rights:</b> Fixes write permissions for all folders/files.",
             ),
+            (
+                "streamboard_checkout",
+                "Streamboard Revision" if is_de else "Streamboard Revision",
+                "#00BFFF",
+                self.checkout_streamboard_revision,
+                "white",
+                "SP_DialogOpenButton",
+                "📌 <b>Streamboard Revision:</b> Beliebigen Streamboard-Commit als Patch-Basis auswählen.",
+                "📌 <b>Streamboard Revision:</b> Select any Streamboard commit as the patch base.",
+            ),
         ]
 
         container = QWidget()
@@ -19333,7 +19264,6 @@ class PatchManagerGUI(QWidget):
         # ---------------------------------------------------------
         parent_layout.addWidget(container)
 
-    
     def update_all_texts(self):
         # ---------------------------------------------------------
         # LABELS
@@ -19390,9 +19320,6 @@ class PatchManagerGUI(QWidget):
             self.info_text.setPlainText(
                 TEXTS[self.LANG]["info_text"]
             )
-
-
-
 
     # ---------------------
     @staticmethod
@@ -20312,8 +20239,6 @@ class PatchManagerGUI(QWidget):
                 self.enable_standard_theme()       
 
         QApplication.processEvents()
-
-
 
     def edit_patch_header(self, info_widget=None, progress_callback=None):
         """Öffnet den Header-Editor mit Neon-Regenbogen-Progress, Sound und Sprach-Support."""
@@ -22918,6 +22843,427 @@ class PatchManagerGUI(QWidget):
         self.github_upload_patch_button.setText(TEXTS[LANG]["github_upload_patch"])
         self.github_upload_emu_button.setText(TEXTS[LANG]["github_upload_emu"])
     
+    def checkout_streamboard_revision(self):
+        """
+        Wählt eine beliebige Streamboard-Git-Revision aus und checkt sie
+        im lokalen STREAMREPO als detached HEAD aus.
+
+        Wichtig:
+        - Es werden keine untracked Dateien gelöscht.
+        - Bei einem nicht sauberen Working Tree wird der Vorgang abgebrochen.
+        - Ein Commit kann aus der Liste gewählt oder als SHA manuell eingegeben werden.
+        - Die Auswahl wird in self.selected_streamboard_commit gespeichert und
+          anschließend von create_patch() als Patch-Basis verwendet.
+        """
+        import os
+        import re
+        import subprocess
+
+        from PyQt6.QtWidgets import (
+            QApplication,
+            QDialog,
+            QDialogButtonBox,
+            QLabel,
+            QLineEdit,
+            QListWidget,
+            QListWidgetItem,
+            QMessageBox,
+            QPushButton,
+            QVBoxLayout,
+        )
+
+        lang = str(getattr(self, "LANG", "de")).lower()[:2]
+        is_de = lang == "de"
+
+        stream_dir = os.path.abspath(
+            globals().get("STREAMREPO", "")
+        )
+        stream_url = str(
+            globals().get(
+                "STREAMREPO_URL",
+                "https://git.streamboard.tv/common/oscam.git"
+            )
+        ).strip()
+
+        if not stream_dir:
+            QMessageBox.critical(
+                self,
+                "Streamboard",
+                "STREAMREPO ist nicht definiert."
+                if is_de else
+                "STREAMREPO is not defined."
+            )
+            return False
+
+        try:
+            git = find_git_executable()
+        except Exception:
+            git = None
+
+        if not git:
+            QMessageBox.critical(
+                self,
+                "Git",
+                "Git wurde nicht gefunden."
+                if is_de else
+                "Git was not found."
+            )
+            return False
+
+        def git_run(args, cwd=stream_dir, check=True, timeout=1200):
+            result = subprocess.run(
+                [git] + list(args),
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+            )
+            out = (result.stdout or "").strip()
+            err = (result.stderr or "").strip()
+            if check and result.returncode != 0:
+                raise RuntimeError(err or out or "Git command failed")
+            return out
+
+        try:
+            # Repository bei Bedarf anlegen/klonen.
+            if not os.path.isdir(stream_dir) or not os.path.isdir(
+                os.path.join(stream_dir, ".git")
+            ):
+                ensure_git_repository(
+                    stream_dir,
+                    stream_url,
+                    description="Streamboard",
+                    clone_timeout=1200,
+                )
+
+            # Sicherheitsprüfung: niemals uncommitted Änderungen überschreiben.
+            status = git_run(["status", "--porcelain"], timeout=60)
+            if status:
+                QMessageBox.warning(
+                    self,
+                    "Streamboard",
+                    (
+                        "Das Streamboard-Arbeitsverzeichnis enthält lokale Änderungen.\n\n"
+                        "Bitte zuerst committen/stashen oder den Ordner bereinigen.\n"
+                        "Es werden von diesem Dialog keine Dateien gelöscht."
+                    ) if is_de else (
+                        "The Streamboard working tree contains local changes.\n\n"
+                        "Please commit/stash them or clean the repository first.\n"
+                        "This dialog will not delete any files."
+                    )
+                )
+                return False
+
+            # Nur Streamboard/master aktualisieren. Damit zeigt die Liste
+            # wirklich die Commits aus genau dem von dir genannten
+            # Streamboard-Master und nicht zufällige lokale Branches.
+            git_run(
+                [
+                    "fetch",
+                    stream_url,
+                    "refs/heads/master:refs/remotes/streamboard/master",
+                ],
+                timeout=1200,
+            )
+
+            # Aktuellen Remote-Master direkt vom Server bestimmen.
+            remote_head = ""
+            try:
+                remote_head = git_run(
+                    ["ls-remote", "--exit-code", stream_url, "refs/heads/master"],
+                    cwd=stream_dir,
+                    timeout=120,
+                ).split()[0]
+            except Exception:
+                remote_head = ""
+
+            # Letzte 100 Commits ausschließlich aus Streamboard/master.
+            log_output = git_run(
+                [
+                    "log",
+                    "streamboard/master",
+                    "-100",
+                    "--date=format:%Y-%m-%d %H:%M",
+                    "--format=%H%x09%ad%x09%s",
+                ],
+                timeout=120,
+            )
+
+            commits = []
+            seen = set()
+            for line in log_output.splitlines():
+                parts = line.split("\t", 2)
+                if len(parts) != 3:
+                    continue
+                sha, date_text, subject = parts
+                sha = sha.strip()
+                if not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
+                    continue
+                if sha in seen:
+                    continue
+                seen.add(sha)
+                commits.append((sha, date_text, subject))
+
+            if remote_head and remote_head not in seen:
+                try:
+                    git_run(["fetch", stream_url, remote_head], timeout=1200)
+                    subject = git_run(
+                        ["show", "-s", "--format=%s", remote_head],
+                        timeout=60,
+                    )
+                    date_text = git_run(
+                        ["show", "-s", "--date=format:%Y-%m-%d %H:%M", "--format=%ad", remote_head],
+                        timeout=60,
+                    )
+                    commits.insert(0, (remote_head, date_text, subject))
+                    seen.add(remote_head)
+                except Exception:
+                    pass
+
+            dialog = QDialog(self)
+            dialog.setModal(True)
+            dialog.resize(900, 620)
+            dialog.setWindowTitle(
+                "Streamboard Git-Revision auswählen"
+                if is_de else
+                "Select Streamboard Git Revision"
+            )
+
+            layout = QVBoxLayout(dialog)
+
+            info = QLabel(
+                (
+                    "Wähle einen Commit aus oder gib einen vollständigen Git-SHA ein.\n"
+                    "Der ausgewählte Commit wird detached ausgecheckt und für die Patch-Erstellung verwendet."
+                ) if is_de else (
+                    "Select a commit or enter a full Git SHA.\n"
+                    "The selected commit will be checked out detached and used as the patch base."
+                )
+            )
+            info.setWordWrap(True)
+            layout.addWidget(info)
+
+            current = getattr(self, "selected_streamboard_commit", "")
+            if current:
+                current_label = QLabel(
+                    f"Aktuell ausgewählt: {current}" if is_de else
+                    f"Currently selected: {current}"
+                )
+                layout.addWidget(current_label)
+
+            commit_list = QListWidget(dialog)
+            layout.addWidget(commit_list)
+
+            for sha, date_text, subject in commits:
+                item = QListWidgetItem(
+                    f"{date_text}  {sha[:12]}  {subject}"
+                )
+                item.setData(0x0100, sha)
+                commit_list.addItem(item)
+
+            sha_edit = QLineEdit(dialog)
+            sha_edit.setPlaceholderText(
+                "Vollständigen 40-stelligen Commit-SHA eingeben"
+                if is_de else
+                "Enter full 40-character commit SHA"
+            )
+            layout.addWidget(sha_edit)
+
+            refresh_button = QPushButton(
+                "Commit-Liste aktualisieren" if is_de else "Refresh commit list"
+            )
+            layout.addWidget(refresh_button)
+
+            buttons = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Ok
+                | QDialogButtonBox.StandardButton.Cancel,
+                parent=dialog,
+            )
+            layout.addWidget(buttons)
+
+            def use_list_selection():
+                item = commit_list.currentItem()
+                if item is not None:
+                    sha_edit.setText(str(item.data(0x0100)))
+
+            commit_list.itemDoubleClicked.connect(
+                lambda _item: use_list_selection()
+            )
+            commit_list.currentItemChanged.connect(
+                lambda _current, _previous: use_list_selection()
+            )
+
+            # Refresh schließt den Dialog nicht. Die Liste wird neu aufgebaut.
+            def refresh_list():
+                try:
+                    if git_run(["status", "--porcelain"], timeout=60):
+                        QMessageBox.warning(
+                            dialog,
+                            "Streamboard",
+                            "Arbeitsverzeichnis ist nicht sauber."
+                            if is_de else
+                            "Working tree is not clean."
+                        )
+                        return
+                    git_run([
+                        "fetch", stream_url,
+                        "refs/heads/master:refs/remotes/streamboard/master",
+                    ], timeout=1200)
+                    fresh = git_run(
+                        [
+                            "log", "streamboard/master", "-100",
+                            "--date=format:%Y-%m-%d %H:%M",
+                            "--format=%H%x09%ad%x09%s",
+                        ],
+                        timeout=120,
+                    )
+                    commit_list.clear()
+                    local_seen = set()
+                    for line in fresh.splitlines():
+                        parts = line.split("\t", 2)
+                        if len(parts) != 3:
+                            continue
+                        sha, date_text, subject = parts
+                        if not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
+                            continue
+                        if sha in local_seen:
+                            continue
+                        local_seen.add(sha)
+                        refreshed_item = QListWidgetItem(
+                            f"{date_text}  {sha[:12]}  {subject}"
+                        )
+                        refreshed_item.setData(0x0100, sha)
+                        commit_list.addItem(refreshed_item)
+                except Exception as exc:
+                    QMessageBox.critical(
+                        dialog,
+                        "Git",
+                        f"{exc}"
+                    )
+
+            refresh_button.clicked.connect(refresh_list)
+            buttons.accepted.connect(dialog.accept)
+            buttons.rejected.connect(dialog.reject)
+
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return False
+
+            selected = sha_edit.text().strip()
+            if not selected:
+                QMessageBox.warning(
+                    self,
+                    "Streamboard",
+                    "Bitte einen Commit auswählen oder eine SHA eingeben."
+                    if is_de else
+                    "Please select a commit or enter a SHA."
+                )
+                return False
+
+            if not re.fullmatch(r"[0-9a-fA-F]{40}", selected):
+                QMessageBox.warning(
+                    self,
+                    "Streamboard",
+                    "Es muss eine vollständige 40-stellige Git-SHA eingegeben werden."
+                    if is_de else
+                    "A complete 40-character Git SHA is required."
+                )
+                return False
+
+            selected = selected.lower()
+
+            # Commit bei manueller Eingabe explizit vom Streamboard-Server holen.
+            local_selected = git_run(
+                ["rev-parse", "--verify", selected + "^{commit}"],
+                check=False,
+                timeout=60,
+            )
+            if local_selected != selected:
+                git_run(
+                    ["fetch", stream_url, selected],
+                    timeout=1200,
+                )
+                local_selected = git_run(
+                    ["rev-parse", "--verify", selected + "^{commit}"],
+                    check=False,
+                    timeout=60,
+                )
+
+            if local_selected != selected:
+                raise RuntimeError(
+                    "Der gewünschte Commit konnte nicht aus Streamboard geladen werden."
+                    if is_de else
+                    "The requested commit could not be fetched from Streamboard."
+                )
+
+            # Exakt diesen Commit auschecken. Kein Reset --hard und kein git clean.
+            git_run(
+                ["checkout", "--detach", selected],
+                timeout=1200,
+            )
+
+            checked_out = git_run(
+                ["rev-parse", "HEAD"],
+                timeout=60,
+            )
+            if checked_out != selected:
+                raise RuntimeError(
+                    "Der ausgewählte Commit konnte nicht exakt ausgecheckt werden."
+                    if is_de else
+                    "The selected commit could not be checked out exactly."
+                )
+
+            self.selected_streamboard_commit = selected
+            # Für bestehende externe Helfer ebenfalls global verfügbar machen.
+            globals()["SELECTED_STREAMBOARD_COMMIT"] = selected
+
+            # Button/Status optisch aktualisieren, falls vorhanden.
+            status_text = (
+                f"Streamboard Basis: {selected[:12]}"
+                if is_de else
+                f"Streamboard base: {selected[:12]}"
+            )
+            try:
+                if hasattr(self, "info_text"):
+                    self.info_text.append(
+                        f"<b>✅ {status_text}</b>"
+                    )
+                    self.info_text.ensureCursorVisible()
+            except Exception:
+                pass
+
+            try:
+                QApplication.processEvents()
+            except Exception:
+                pass
+
+            QMessageBox.information(
+                self,
+                "Streamboard",
+                (
+                    f"Commit erfolgreich ausgewählt:\n\n{selected}\n\n"
+                    "Dieser Commit wird bei der nächsten Patch-Erstellung als Basis verwendet."
+                ) if is_de else (
+                    f"Commit selected successfully:\n\n{selected}\n\n"
+                    "This commit will be used as the base for the next patch."
+                )
+            )
+            return True
+
+        except Exception as exc:
+            print("[STREAMBOARD CHECKOUT] Fehler:", repr(exc), flush=True)
+            try:
+                QMessageBox.critical(
+                    self,
+                    "Streamboard Git",
+                    f"Fehler:\n{exc}"
+                )
+            except Exception:
+                pass
+            return False
+
     def setup_grid_buttons(self):
             """
             Erstellt die Aktions-Buttons für die Patch-Verwaltung.
@@ -25426,8 +25772,6 @@ class PatchManagerGUI(QWidget):
         # ---------------------------------------------------------
         worker.start()
 
-
-
     def on_clean_emu_clicked(self):
         """Sorgt dafür, dass das Log vor der Bereinigung englisch wird."""
         # 1. Sprache/UI synchronisieren (löscht alte deutsche Texte im Log)
@@ -25740,7 +26084,6 @@ class PatchManagerGUI(QWidget):
 
         except RuntimeError:
             pass
-
 
         # ============================================================
         # 8. PROGRESSBAR IDLE NACH THEME-ÄNDERUNG
@@ -26063,17 +26406,10 @@ class PatchManagerGUI(QWidget):
 
         QApplication.processEvents()
 
-    
-
     # =====================
     # GITHUB EMU CREDENTIALS
     # =====================
 
-    
-
-    # =====================
-    # GITHUB EMU CREDENTIALS
-    # =====================
     def check_emu_credentials(self):
         cfg = load_github_config()
         if not all([cfg.get("emu_repo_url"), cfg.get("username"), cfg.get("token")]):
@@ -26664,8 +27000,6 @@ class PatchManagerGUI(QWidget):
             except Exception:
                 pass
 
-
-
     def change_old_(self, info_widget=None, progress_callback=None):
         # --- Final Label verstecken ---
         if hasattr(self, "hide_final_label"):
@@ -26698,12 +27032,6 @@ class PatchManagerGUI(QWidget):
 
         if progress_callback:
             progress_callback(100)
-
-
-    
-
-
-
 
     def closeEvent(self, event):
         """
@@ -26763,7 +27091,6 @@ class PatchManagerGUI(QWidget):
         except Exception as e:
             print(f"Fehler im closeEvent: {e}")
             event.accept()
-
 
 auto_install_emoji_font()
 # =============================================================================
@@ -26882,8 +27209,6 @@ if __name__ == "__main__":
                     sys.exit(1)
         except Exception as e:
             print(f"[!] Elevation-Error: {e}")
-
-
 
     # Rechte prüfen, bevor die GUI geladen wird
     elevate_privileges()
