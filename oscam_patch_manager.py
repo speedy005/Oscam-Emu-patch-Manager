@@ -856,7 +856,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "7.2.9"
+APP_VERSION = "7.4.0"
 # ===================== PATCH DIRS =====================
 def get_best_patch_dir():
     """Bestimmt den besten Patch-Ordner (S3, lokal, Home)."""
@@ -1663,6 +1663,12 @@ TEXTS = {
         "patch_renew": "Renew Patch",
         "patch_check": "Check Patch",
         "settings_header": "Settings",
+        "patch_folder_s3_ncam": "S3-NCam-patch Path",
+        "patch_folder_s4": "S4 patch Path",
+        "patch_copy_s3_ncam": "Patch to S3-NCam",
+        "patch_copy_s4": "Patch to S4",
+        "patch_folder_s3_ncam_tooltip": "Select S3-NCam-Bonecrew patch folder",
+        "patch_folder_s4_tooltip": "Select S4 patch folder",
         # "patch_save_label": "Save Patch",
         "patch_apply": "Apply Patch",
         "patch_path_label": "Save Patch",
@@ -1670,6 +1676,7 @@ TEXTS = {
         "backup_old": "S3-Backup/Renew Patch",
         "clean_folder": "Clean Patch Folder",
         "change_old_dir": "Select S3 Patch Folder",
+        "oscam_emu_revision": "OSCam-Emu Revision",
         # Commits
         "loading_commits": "Loading commits...",
         "commits_loaded": "Commits successfully loaded",
@@ -2064,15 +2071,22 @@ TEXTS = {
     },
     "de": {
         # Grid Buttons / Patch Aktionen
+        "patch_folder_s3_ncam": "S3-NCam-Pfad patch",
+        "patch_folder_s4": "S4 - Pfad patch",
+        "patch_copy_s3_ncam": "Patch zu S3-NCam",
+        "patch_copy_s4": "Patch zu S4",
+        "patch_folder_s3_ncam_tooltip": "S3-NCam-Bonecrew Patch-Ordner wählen",
+        "patch_folder_s4_tooltip": "S4 Patch-Ordner wählen",
         "patch_create": "Patch erstellen",
         "patch_renew": "Patch erneuern",
         "patch_check": "Patch prüfen",
         "patch_apply": "Patch anwenden",
         "patch_zip": "Patch zippen",
-        "backup_old": "Patch sichern/erneuern",
-        "clean_folder": "Patch-Ordner leeren",
+        "backup_old": "Patch nach S3",
+        "clean_folder": "Patch leeren",
         "patch_path_label": "Patch speichern",
         "change_old_dir": "S3-Patch-Ordner",
+        "oscam_emu_revision": "OSCam-Emu Revision",
         # OSCam-Emu Git Patch
         "patch_emu_git_done": "🎉 OScam-Emu Git erfolgreich gepatcht!",
         "patch_emu_git_start": "🚀 Starte OScam-Emu Patch-Prozess...",
@@ -2545,6 +2559,15 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
     CONFIG_FILE = globals().get("CONFIG_FILE", "config.json")
 
     try:
+        # 0. Eine einzige, klare Schnittstelle: Updates müssen ein Dictionary sein.
+        if cfg_updates is None:
+            cfg_updates = {}
+        if not isinstance(cfg_updates, dict):
+            raise TypeError(
+                f"save_config erwartet ein dict, erhalten: {type(cfg_updates).__name__}"
+            )
+        cfg_updates = dict(cfg_updates)
+
         # 1. Bestehende Config laden
         current_cfg = {}
         if os.path.exists(CONFIG_FILE):
@@ -2561,11 +2584,12 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
         for key in list(cfg_updates.keys()):
             if key in path_keys and isinstance(cfg_updates[key], str):
                 path_val = cfg_updates[key]
-                # FIX: Korrekte Prüfung auf Doppelpunkt bei Windows-Laufwerken unter Linux
-                if not is_win and len(path_val) > 1 and path_val[1] == ":":
-                    path_val = path_val[2:]  # Macht aus C:\opt\s3 -> \opt\s3
-                
-                cfg_updates[key] = os.path.normpath(path_val)
+                # Pfade nicht künstlich zwischen Betriebssystemen umschreiben.
+                # Ein Windows-Pfad darf unter Linux in der Config sichtbar bleiben,
+                # statt durch das Entfernen von "C:" beschädigt zu werden.
+                if is_win:
+                    path_val = os.path.normpath(path_val)
+                cfg_updates[key] = path_val
 
         # 2. Mergen der neuen Updates
         current_cfg.update(cfg_updates)
@@ -2610,17 +2634,21 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
                         timer.start()
 
             # --- THEME FIX ---
-            theme = str(current_cfg.get("theme_mode", "standard")).lower()
-            color = str(current_cfg.get("color", "Classics")).lower()
-            
-            if "matrix" in theme or "matrix" in color:
-                if hasattr(gui_instance, "enable_matrix_theme"):
-                    gui_instance.enable_matrix_theme()
-                current_cfg["theme_mode"] = "matrix"
-            else:
-                if hasattr(gui_instance, "enable_standard_theme"):
-                    gui_instance.enable_standard_theme()
-                current_cfg["theme_mode"] = "standard"
+            # Theme nicht bei jedem beliebigen Config-Update neu anwenden.
+            # Besonders wichtig bei Commit-Anzahl/Pfadänderungen: dadurch werden
+            # keine unnötigen Repaints und keine QMainWindow-only Methoden aufgerufen.
+            if "theme_mode" in cfg_updates or "color" in cfg_updates:
+                theme = str(current_cfg.get("theme_mode", "standard")).lower()
+                color = str(current_cfg.get("color", "Classics")).lower()
+
+                if "matrix" in theme or "matrix" in color:
+                    if hasattr(gui_instance, "enable_matrix_theme"):
+                        gui_instance.enable_matrix_theme()
+                    current_cfg["theme_mode"] = "matrix"
+                else:
+                    if hasattr(gui_instance, "enable_standard_theme"):
+                        gui_instance.enable_standard_theme()
+                    current_cfg["theme_mode"] = "standard"
 
         # 5. Speichern in die Datei
         with open(os.path.abspath(CONFIG_FILE), "w", encoding="utf-8") as f:
@@ -2628,7 +2656,10 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
 
         # 6. UI & Feedback Logik
         if gui_instance:
+            # Beide Attribute müssen auf dasselbe Dictionary zeigen.
+            # Sonst arbeitet ein Teil der GUI mit einer veralteten Config.
             gui_instance.current_config = current_cfg
+            gui_instance.cfg = current_cfg
             is_loading = getattr(gui_instance, "is_loading", False)
             is_closing = getattr(gui_instance, "is_closing", False)
 
@@ -2671,8 +2702,11 @@ def save_config(cfg_updates, gui_instance=None, silent=False):
                         f"<span style='color:{log_color}; font-weight:700;'><b>{msg}</b></span>"
                     )
 
+        return True
+
     except Exception as e:
         print(f"Fehler beim Speichern: {e}")
+        return False
 
 # ===================== CONFIG =====================
 def load_config(gui_instance=None):
@@ -2697,11 +2731,19 @@ def load_config(gui_instance=None):
     default_ncam = "C:\\opt\\ncam" if is_win else "/opt/s3_ncam_bonecrew"
     default_s4 = "C:\\opt\\simplebuild4" if is_win else "/opt/simplebuild4"
 
+    
     default_cfg = {
         "commit_count": 5,
+
+        # Commit-Verlauf
+        "last_stream_commit": "",
+        "previous_stream_commit": "",
+
         "color": "Classics",
         "language": "de",
         "s3_patch_path": os.path.normpath(base_patch_dir),
+        "ncam_patch_path": os.path.normpath(base_patch_dir),
+        "s4_patch_path": os.path.normpath(base_patch_dir),
         "s3_custom_path": default_s3,
         "ncam_custom_path": default_ncam,
         "s4_custom_path": default_s4,
@@ -2711,6 +2753,7 @@ def load_config(gui_instance=None):
         "blink_speed": 500,
         "led_enabled": True,
     }
+
 
     # --- Config-Datei erstellen, falls nicht vorhanden ---
     if not os.path.exists(CONFIG_FILE):
@@ -2731,7 +2774,7 @@ def load_config(gui_instance=None):
 
         # --- Fehlende Keys ergänzen & Pfade normalisieren ---
         needs_save = False
-        path_keys = ["s3_custom_path", "ncam_custom_path", "s3_patch_path", "s4_custom_path"]
+        path_keys = ["s3_custom_path", "ncam_custom_path", "s3_patch_path", "ncam_patch_path", "s4_patch_path", "s4_custom_path"]
         
         for key, value in default_cfg.items():
             if key not in cfg:
@@ -2772,6 +2815,8 @@ def load_config(gui_instance=None):
         globals()["S3_PATH"] = cfg["s3_custom_path"]
         globals()["NCAM_PATH"] = cfg["ncam_custom_path"]
         globals()["S4_PATH"] = cfg["s4_custom_path"]
+        globals()["NCAM_PATCH_PATH"] = cfg.get("ncam_patch_path", cfg.get("s3_patch_path", base_patch_dir))
+        globals()["S4_PATCH_PATH"] = cfg.get("s4_patch_path", cfg.get("s3_patch_path", base_patch_dir))
 
         # --- GUI-Integration ---
         if gui_instance:
@@ -2828,11 +2873,21 @@ def load_config(gui_instance=None):
 
 # ===================== INFOSCREEN =====================
 def github_upload_patch_file(
-    gui_instance=None, info_widget=None, progress_callback=None
+    gui_instance=None,
+    info_widget=None,
+    progress_callback=None
 ):
     """
     Lädt ausschließlich PATCH_FILE als oscam-emu.patch
     in das konfigurierte GitHub-Repository.
+
+    Sicherheit:
+    - GitHub-Token wird NICHT in die Repository-URL geschrieben.
+    - Token landet NICHT in .git/config.
+    - Authentifizierung erfolgt temporär über GIT_ASKPASS.
+    - GIT_TERMINAL_PROMPT=0 verhindert interaktive Abfragen.
+    - Token wird nicht absichtlich geloggt.
+    - Temporäre ASKPASS-Dateien werden nach dem Upload gelöscht.
 
     Windows-sicher:
     - Repository wird mit --no-checkout geklont.
@@ -2844,17 +2899,26 @@ def github_upload_patch_file(
     """
 
     from PyQt6.QtWidgets import QTextEdit, QApplication
+
     import os
+    import sys
     import shutil
     import tempfile
     import datetime
     import time
+    import stat
 
     # ------------------------------------------------------------
     # Final Label verstecken
     # ------------------------------------------------------------
-    if gui_instance and hasattr(gui_instance, "hide_final_label"):
-        gui_instance.hide_final_label()
+    if gui_instance and hasattr(
+        gui_instance,
+        "hide_final_label"
+    ):
+        try:
+            gui_instance.hide_final_label()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------
     # Widget / Sprache
@@ -2862,10 +2926,19 @@ def github_upload_patch_file(
     widget = (
         info_widget
         if isinstance(info_widget, QTextEdit)
-        else getattr(gui_instance, "info_text", None)
+        else getattr(
+            gui_instance,
+            "info_text",
+            None
+        )
     )
 
-    pbar = getattr(gui_instance, "progress_bar", None)
+    pbar = getattr(
+        gui_instance,
+        "progress_bar",
+        None
+    )
+
     lang = str(
         getattr(gui_instance, "LANG", "de")
     ).lower()[:2]
@@ -2918,56 +2991,94 @@ def github_upload_patch_file(
         }
     """
 
-    def set_progress(value, is_err=False, text=None):
-        if pbar:
-            pbar.setStyleSheet(
-                style_err if is_err else style_rb
-            )
-            pbar.setValue(value)
+    def set_progress(
+        value,
+        is_err=False,
+        text=None
+    ):
+        try:
 
-            if text:
-                pbar.setFormat(text)
-            else:
-                pbar.setFormat("%p%")
+            if pbar:
 
-            pbar.show()
+                pbar.setStyleSheet(
+                    style_err
+                    if is_err
+                    else style_rb
+                )
+
+                pbar.setValue(
+                    int(value)
+                )
+
+                if text:
+                    pbar.setFormat(text)
+                else:
+                    pbar.setFormat("%p%")
+
+                pbar.show()
+
+        except Exception:
+            pass
 
         if progress_callback:
+
             try:
                 progress_callback(value)
             except Exception:
                 pass
 
-        QApplication.processEvents()
+        try:
+            QApplication.processEvents()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------
     # Sound
     # ------------------------------------------------------------
     def play_sound(success=True):
+
         try:
+
             if "safe_play" in globals():
+
                 safe_play(
                     "complete.oga"
                     if success
                     else "dialog-error.oga"
                 )
+
         except Exception:
             pass
 
     # ------------------------------------------------------------
     # Logging
     # ------------------------------------------------------------
-    def log(message, level="info", **kwargs):
+    def log(
+        message,
+        level="info",
+        **kwargs
+    ):
+
         try:
-            # Wenn message ein TEXTS-Key ist
-            if isinstance(message, str) and "TEXTS" in globals():
+
+            # -----------------------------------------------
+            # TEXTS-Key
+            # -----------------------------------------------
+            if (
+                isinstance(message, str)
+                and "TEXTS" in globals()
+            ):
+
                 lang_dict = TEXTS.get(
                     lang,
                     TEXTS.get("en", {})
                 )
 
                 if message in lang_dict:
-                    text_template = lang_dict[message]
+
+                    text_template = (
+                        lang_dict[message]
+                    )
 
                     try:
                         text = text_template.format(
@@ -2975,22 +3086,63 @@ def github_upload_patch_file(
                         )
                     except Exception:
                         text = text_template
+
                 else:
                     text = message
+
             else:
                 text = str(message)
 
-            if gui_instance and hasattr(
-                gui_instance,
-                "append_info"
+            # -----------------------------------------------
+            # Sicherheitsfilter für Credentials
+            # -----------------------------------------------
+            github_token = kwargs.get(
+                "_github_token",
+                ""
+            )
+
+            github_username = kwargs.get(
+                "_github_username",
+                ""
+            )
+
+            if github_token:
+                text = text.replace(
+                    github_token,
+                    "***TOKEN***"
+                )
+
+            if (
+                github_username
+                and github_token
             ):
+
+                text = text.replace(
+                    f"{github_username}:{github_token}",
+                    f"{github_username}:***TOKEN***"
+                )
+
+            # -----------------------------------------------
+            # GUI
+            # -----------------------------------------------
+            if (
+                gui_instance
+                and hasattr(
+                    gui_instance,
+                    "append_info"
+                )
+            ):
+
                 gui_instance.append_info(
                     widget,
                     text,
                     level
                 )
 
-            QApplication.processEvents()
+            try:
+                QApplication.processEvents()
+            except Exception:
+                pass
 
         except Exception:
             pass
@@ -2998,7 +3150,10 @@ def github_upload_patch_file(
     # ------------------------------------------------------------
     # Windows-sicheres Cleanup
     # ------------------------------------------------------------
-    def cleanup_directory(path, retries=5):
+    def cleanup_directory(
+        path,
+        retries=5
+    ):
 
         if not path:
             return
@@ -3012,7 +3167,9 @@ def github_upload_patch_file(
 
             try:
 
+                # -------------------------------------------
                 # Schreibschutz entfernen
+                # -------------------------------------------
                 for root, dirs, files in os.walk(
                     path,
                     topdown=False
@@ -3057,16 +3214,164 @@ def github_upload_patch_file(
 
                 last_error = exc
 
-                QApplication.processEvents()
+                try:
+                    QApplication.processEvents()
+                except Exception:
+                    pass
+
                 time.sleep(0.5)
 
         if last_error:
+
             raise RuntimeError(
                 "Temporäres Git-Verzeichnis konnte "
                 "nicht gelöscht werden:\n\n"
                 f"{path}\n\n"
                 f"{last_error}"
             )
+
+    # ------------------------------------------------------------
+    # Sichere ASKPASS-Erzeugung
+    # ------------------------------------------------------------
+    askpass_dir = None
+    askpass_script = None
+    askpass_launcher = None
+
+    def create_askpass():
+
+        nonlocal askpass_dir
+        nonlocal askpass_script
+        nonlocal askpass_launcher
+
+        askpass_dir = tempfile.mkdtemp(
+            prefix="oscam_git_auth_",
+            dir=temp_parent
+        )
+
+        # --------------------------------------------------------
+        # Das Skript enthält KEIN Token.
+        # Das Token wird nur aus der Environment gelesen.
+        # --------------------------------------------------------
+        askpass_script = os.path.join(
+            askpass_dir,
+            "askpass.py"
+        )
+
+        askpass_code = r'''import os
+import sys
+
+prompt = " ".join(sys.argv[1:]).lower()
+
+if "username" in prompt or "user" in prompt:
+    value = os.environ.get(
+        "OSC_GITHUB_USERNAME",
+        ""
+    )
+else:
+    value = os.environ.get(
+        "OSC_GITHUB_TOKEN",
+        ""
+    )
+
+sys.stdout.write(value)
+'''
+
+        with open(
+            askpass_script,
+            "w",
+            encoding="utf-8"
+        ) as f:
+
+            f.write(
+                askpass_code
+            )
+
+        # --------------------------------------------------------
+        # Windows
+        # --------------------------------------------------------
+        if os.name == "nt":
+
+            askpass_launcher = os.path.join(
+                askpass_dir,
+                "askpass.cmd"
+            )
+
+            launcher_code = (
+                "@echo off\r\n"
+                f'"{sys.executable}" '
+                f'"{askpass_script}" %*\r\n'
+            )
+
+            with open(
+                askpass_launcher,
+                "w",
+                encoding="utf-8"
+            ) as f:
+
+                f.write(
+                    launcher_code
+                )
+
+        # --------------------------------------------------------
+        # Linux / macOS
+        # --------------------------------------------------------
+        else:
+
+            askpass_launcher = os.path.join(
+                askpass_dir,
+                "askpass.sh"
+            )
+
+            launcher_code = (
+                "#!/bin/sh\n"
+                f'exec "{sys.executable}" '
+                f'"{askpass_script}" "$@"\n'
+            )
+
+            with open(
+                askpass_launcher,
+                "w",
+                encoding="utf-8"
+            ) as f:
+
+                f.write(
+                    launcher_code
+                )
+
+            os.chmod(
+                askpass_launcher,
+                stat.S_IRUSR
+                | stat.S_IWUSR
+                | stat.S_IXUSR
+            )
+
+        return askpass_launcher
+
+    # ------------------------------------------------------------
+    # ASKPASS Cleanup
+    # ------------------------------------------------------------
+    def cleanup_askpass():
+
+        nonlocal askpass_dir
+
+        try:
+
+            if (
+                askpass_dir
+                and os.path.isdir(
+                    askpass_dir
+                )
+            ):
+
+                shutil.rmtree(
+                    askpass_dir,
+                    ignore_errors=True
+                )
+
+        except Exception:
+            pass
+
+        askpass_dir = None
 
     # ------------------------------------------------------------
     # Start
@@ -3078,12 +3383,24 @@ def github_upload_patch_file(
 
     temp_parent = None
 
+    # Credentials werden nur innerhalb dieser Funktion gehalten.
+    username = ""
+    token = ""
+
+    # Environment wird später wieder bereinigt.
+    git_env = None
+
     try:
 
         # ========================================================
         # GitHub Config
         # ========================================================
         cfg = load_github_config()
+
+        if not isinstance(cfg, dict):
+            raise RuntimeError(
+                "GitHub-Konfiguration ist ungültig."
+            )
 
         repo_url = str(
             cfg.get("repo_url") or ""
@@ -3109,7 +3426,14 @@ def github_upload_patch_file(
             cfg.get("user_email") or ""
         ).strip()
 
-        if not repo_url or not username or not token:
+        # ========================================================
+        # Credentials prüfen
+        # ========================================================
+        if (
+            not repo_url
+            or not username
+            or not token
+        ):
 
             log(
                 "GitHub Credentials fehlen.",
@@ -3126,12 +3450,43 @@ def github_upload_patch_file(
             return False
 
         # ========================================================
+        # Repository URL prüfen
+        # ========================================================
+        if not repo_url.startswith(
+            "https://"
+        ):
+
+            raise RuntimeError(
+                "Die GitHub Repository-URL muss "
+                "mit https:// beginnen."
+            )
+
+        # ========================================================
         # Patch prüfen
         # ========================================================
-        if not os.path.isfile(PATCH_FILE):
+        patch_file = globals().get(
+            "PATCH_FILE"
+        )
+
+        if not patch_file:
+
+            raise RuntimeError(
+                "PATCH_FILE ist nicht definiert."
+            )
+
+        patch_file = os.path.abspath(
+            os.path.expanduser(
+                str(patch_file)
+            )
+        )
+
+        if not os.path.isfile(
+            patch_file
+        ):
 
             log(
-                f"Patch-Datei nicht gefunden:\n{PATCH_FILE}",
+                f"Patch-Datei nicht gefunden:\n"
+                f"{patch_file}",
                 "error"
             )
 
@@ -3146,20 +3501,36 @@ def github_upload_patch_file(
 
         # ========================================================
         # Temporären Parent erzeugen
-        #
-        # WICHTIG:
-        # Nur der Parent wird erzeugt.
-        #
-        # Das eigentliche Clone-Ziel existiert noch NICHT.
         # ========================================================
         set_progress(
             15,
             text="📁 Temp-Verzeichnis..."
         )
 
+        plugin_dir = globals().get(
+            "PLUGIN_DIR"
+        )
+
+        if plugin_dir:
+            plugin_dir = os.path.abspath(
+                os.path.expanduser(
+                    str(plugin_dir)
+                )
+            )
+
+            try:
+                os.makedirs(
+                    plugin_dir,
+                    exist_ok=True
+                )
+            except Exception:
+                plugin_dir = None
+
         temp_parent = tempfile.mkdtemp(
             prefix="oscam_patch_upload_",
-            dir=PLUGIN_DIR
+            dir=plugin_dir
+            if plugin_dir
+            else None
         )
 
         temp_repo = os.path.join(
@@ -3168,34 +3539,44 @@ def github_upload_patch_file(
         )
 
         # ========================================================
-        # Auth URL
-        # ========================================================
-        if not repo_url.startswith("https://"):
-            raise RuntimeError(
-                "Die GitHub Repository-URL muss "
-                "mit https:// beginnen."
-            )
-
-        token_url = repo_url.replace(
-            "https://",
-            f"https://{username}:{token}@",
-            1
-        )
-
-        # ========================================================
-        # Git Environment
+        # Sichere Git Environment
         # ========================================================
         git_env = os.environ.copy()
-        git_env["GIT_TERMINAL_PROMPT"] = "0"
+
+        git_env[
+            "GIT_TERMINAL_PROMPT"
+        ] = "0"
+
+        git_env[
+            "GIT_ASKPASS_REQUIRE"
+        ] = "force"
+
+        # Token NICHT in URL.
+        git_env[
+            "OSC_GITHUB_USERNAME"
+        ] = username
+
+        git_env[
+            "OSC_GITHUB_TOKEN"
+        ] = token
+
+        # ========================================================
+        # ASKPASS erzeugen
+        # ========================================================
+        create_askpass()
+
+        git_env[
+            "GIT_ASKPASS"
+        ] = askpass_launcher
 
         # ========================================================
         # Repository klonen
         #
-        # --no-checkout verhindert den Windows-Fehler:
+        # --no-checkout verhindert unter Windows:
         #
-        # invalid path '.github /workflows/...'
+        # invalid path ...
         #
-        # Das komplette Working Tree wird NICHT ausgecheckt.
+        # Es wird KEIN vollständiger Working Tree ausgecheckt.
         # ========================================================
         set_progress(
             25,
@@ -3213,12 +3594,47 @@ def github_upload_patch_file(
                 "--no-checkout",
                 "--branch",
                 branch,
-                token_url,
+                repo_url,
                 temp_repo,
             ],
             cwd=temp_parent,
-            timeout=600
+            timeout=600,
+            env=git_env
         )
+
+        # ========================================================
+        # Sicherheitsprüfung:
+        # Remote darf keinen Token enthalten.
+        # ========================================================
+        try:
+
+            remote_result = git_command(
+                [
+                    "remote",
+                    "get-url",
+                    "origin"
+                ],
+                cwd=temp_repo,
+                env=git_env
+            )
+
+            remote_url = str(
+                remote_result or ""
+            ).strip()
+
+            if token and token in remote_url:
+
+                raise RuntimeError(
+                    "Sicherheitsfehler: "
+                    "GitHub-Token wurde in der "
+                    "Remote-URL erkannt."
+                )
+
+        except TypeError:
+            # Falls git_command() keinen env-Parameter
+            # akzeptiert, wird die Prüfung später über
+            # git config durchgeführt.
+            pass
 
         # ========================================================
         # Git Config
@@ -3236,7 +3652,8 @@ def github_upload_patch_file(
                     "user.name",
                     user_name
                 ],
-                cwd=temp_repo
+                cwd=temp_repo,
+                env=git_env
             )
 
         if user_email:
@@ -3247,7 +3664,8 @@ def github_upload_patch_file(
                     "user.email",
                     user_email
                 ],
-                cwd=temp_repo
+                cwd=temp_repo,
+                env=git_env
             )
 
         # ========================================================
@@ -3264,7 +3682,7 @@ def github_upload_patch_file(
         )
 
         shutil.copy2(
-            PATCH_FILE,
+            patch_file,
             destination_patch
         )
 
@@ -3274,7 +3692,7 @@ def github_upload_patch_file(
         try:
 
             with open(
-                PATCH_FILE,
+                patch_file,
                 "r",
                 encoding="utf-8",
                 errors="replace"
@@ -3303,7 +3721,8 @@ def github_upload_patch_file(
                 "--",
                 "oscam-emu.patch"
             ],
-            cwd=temp_repo
+            cwd=temp_repo,
+            env=git_env
         )
 
         # ========================================================
@@ -3322,7 +3741,8 @@ def github_upload_patch_file(
                 "--allow-empty"
             ],
             cwd=temp_repo,
-            allowed_returncodes=(0, 1)
+            allowed_returncodes=(0, 1),
+            env=git_env
         )
 
         # ========================================================
@@ -3338,15 +3758,21 @@ def github_upload_patch_file(
             "warning"
         )
 
+        # --------------------------------------------------------
+        # Bewusst KEIN --force.
+        #
+        # Da wir nur eine einzelne Datei synchronisieren,
+        # sollte ein normaler Push zuerst versucht werden.
+        # --------------------------------------------------------
         git_command(
             [
                 "push",
-                "--force",
                 "origin",
                 branch
             ],
             cwd=temp_repo,
-            timeout=600
+            timeout=600,
+            env=git_env
         )
 
         # ========================================================
@@ -3376,10 +3802,29 @@ def github_upload_patch_file(
     # ============================================================
     except Exception as exc:
 
-        error_text = str(exc).strip()
+        error_text = str(
+            exc
+        ).strip()
 
         if not error_text:
             error_text = "Unbekannter Fehler"
+
+        # --------------------------------------------------------
+        # Token niemals im Log anzeigen
+        # --------------------------------------------------------
+        if token:
+
+            error_text = error_text.replace(
+                token,
+                "***TOKEN***"
+            )
+
+        if username and token:
+
+            error_text = error_text.replace(
+                f"{username}:{token}",
+                f"{username}:***TOKEN***"
+            )
 
         log(
             f"GitHub Upload Fehler:\n{error_text}",
@@ -3401,11 +3846,49 @@ def github_upload_patch_file(
     # ============================================================
     finally:
 
+        # --------------------------------------------------------
+        # ASKPASS-Dateien löschen
+        # --------------------------------------------------------
+        try:
+            cleanup_askpass()
+        except Exception:
+            pass
+
+        # --------------------------------------------------------
+        # Environment bereinigen
+        # --------------------------------------------------------
+        try:
+
+            if git_env is not None:
+
+                git_env.pop(
+                    "OSC_GITHUB_TOKEN",
+                    None
+                )
+
+                git_env.pop(
+                    "OSC_GITHUB_USERNAME",
+                    None
+                )
+
+                git_env.pop(
+                    "GIT_ASKPASS",
+                    None
+                )
+
+        except Exception:
+            pass
+
+        # --------------------------------------------------------
+        # Temporäres Repository löschen
+        # --------------------------------------------------------
         if temp_parent:
 
             try:
 
-                if os.path.exists(temp_parent):
+                if os.path.exists(
+                    temp_parent
+                ):
 
                     cleanup_directory(
                         temp_parent,
@@ -3414,12 +3897,34 @@ def github_upload_patch_file(
 
             except Exception as cleanup_error:
 
+                # Token aus Cleanup-Fehler entfernen
+                cleanup_text = str(
+                    cleanup_error
+                )
+
+                if token:
+
+                    cleanup_text = (
+                        cleanup_text.replace(
+                            token,
+                            "***TOKEN***"
+                        )
+                    )
+
                 log(
                     "Temporäres Upload-Verzeichnis "
-                    f"konnte nicht gelöscht werden:\n"
-                    f"{cleanup_error}",
+                    "konnte nicht gelöscht werden:\n"
+                    f"{cleanup_text}",
                     "warning"
                 )
+
+        # --------------------------------------------------------
+        # Lokale Referenzen auf Credentials löschen
+        # --------------------------------------------------------
+        username = ""
+        token = ""
+        git_env = None
+
 
 
 
@@ -3532,17 +4037,35 @@ def git_command(
     args,
     cwd=None,
     allowed_returncodes=(0,),
-    timeout=600
+    timeout=600,
+    env=None
 ):
     """
     Sicherer Git-Aufruf ohne shell=True.
+
+    env:
+        Optionales Environment für Git.
+        Wird unter anderem für GIT_ASKPASS und
+        temporäre GitHub-Credentials verwendet.
     """
+
+    import os
+    import subprocess
 
     git_executable = find_git_executable()
 
     command = [
         git_executable
-    ] + list(args)
+    ] + [
+        str(arg)
+        for arg in args
+    ]
+
+    # ------------------------------------------------------------
+    # Environment
+    # ------------------------------------------------------------
+    if env is None:
+        env = os.environ.copy()
 
     try:
 
@@ -3556,7 +4079,8 @@ def git_command(
             encoding="utf-8",
             errors="replace",
             shell=False,
-            timeout=timeout
+            timeout=timeout,
+            env=env
         )
 
     except FileNotFoundError as exc:
@@ -3596,6 +4120,47 @@ def git_command(
             or f"Git Returncode: {result.returncode}"
         )
 
+        # --------------------------------------------------------
+        # Sicherheitsfilter
+        #
+        # Falls ein Secret versehentlich in einer Git-Fehlermeldung
+        # auftaucht, wird es vor der Weitergabe entfernt.
+        # --------------------------------------------------------
+        try:
+
+            token = str(
+                env.get(
+                    "OSC_GITHUB_TOKEN",
+                    ""
+                )
+                or ""
+            )
+
+            username = str(
+                env.get(
+                    "OSC_GITHUB_USERNAME",
+                    ""
+                )
+                or ""
+            )
+
+            if token:
+
+                error_text = error_text.replace(
+                    token,
+                    "***TOKEN***"
+                )
+
+            if username and token:
+
+                error_text = error_text.replace(
+                    f"{username}:{token}",
+                    f"{username}:***TOKEN***"
+                )
+
+        except Exception:
+            pass
+
         raise RuntimeError(
             "Git-Befehl fehlgeschlagen:\n\n"
             + " ".join(command)
@@ -3605,11 +4170,18 @@ def git_command(
 
     return result
 
+
 # ============================================================
 # KOMPATIBILITÄTS-ALIAS
 # ============================================================
 
-def _git_command(args, cwd=None, allowed_returncodes=(0,), timeout=600):
+def _git_command(
+    args,
+    cwd=None,
+    allowed_returncodes=(0,),
+    timeout=600,
+    env=None
+):
     """
     Kompatibilitäts-Wrapper für ältere Funktionen,
     die noch _git_command() verwenden.
@@ -3620,7 +4192,9 @@ def _git_command(args, cwd=None, allowed_returncodes=(0,), timeout=600):
         cwd=cwd,
         allowed_returncodes=allowed_returncodes,
         timeout=timeout,
+        env=env,
     )
+
 
 # ============================================================
 # GIT VERFÜGBARKEIT
@@ -4787,27 +5361,66 @@ def run_bash(cmd, cwd=None, info_widget=None, lang="DE", logger=None):
 
 # ===================== GITHUB UPLOAD OSCAM-EMU FOLDER =====================
 def github_upload_oscam_emu_folder(
-    gui_instance=None, info_widget=None, progress_callback=None
+    gui_instance=None,
+    info_widget=None,
+    progress_callback=None
 ):
-    """Lädt den gesamten OSCam-EMU-Git-Ordner nach speedy005/Oscam-emu.
-    Neon-Regenbogen-ProgressBar, schwarze Schrift, 20px, DE/EN Support.
+    """
+    Lädt den kompletten lokalen OSCam-EMU-Git-Ordner nach:
+
+        https://github.com/speedy005/Oscam-emu
+
+    Sicherheit:
+    - GitHub-Token wird NICHT in die Remote-URL geschrieben.
+    - Token wird NICHT in .git/config gespeichert.
+    - Authentifizierung erfolgt temporär über GIT_ASKPASS.
+    - GIT_TERMINAL_PROMPT=0 verhindert interaktive Passwortabfragen.
+    - Token wird nicht absichtlich geloggt.
+    - Fehlerausgaben werden zusätzlich maskiert.
+    - Temporäre ASKPASS-Dateien werden nach dem Vorgang gelöscht.
+    - Push erfolgt mit --force-with-lease statt --force.
+
+    Eigenschaften:
+    - DE/EN Support
+    - PyQt6 ProgressBar
+    - Neon-Regenbogen-ProgressBar
+    - kompletter Ordner wird synchronisiert
+    - keine leeren Commits
+    - keine unnötigen Pushes
     """
 
     from PyQt6.QtWidgets import QTextEdit, QApplication
+
     import os
+    import sys
     import subprocess
+    import tempfile
+    import shutil
+    import stat
 
-    # ------------------------------------------------------------
-    # Final Label verstecken
-    # ------------------------------------------------------------
+    # ============================================================
+    # FINAL LABEL VERSTECKEN
+    # ============================================================
     if gui_instance and hasattr(gui_instance, "hide_final_label"):
-        gui_instance.hide_final_label()
+        try:
+            gui_instance.hide_final_label()
+        except Exception:
+            pass
 
-    # ------------------------------------------------------------
-    # Referenzen & Sprache
-    # ------------------------------------------------------------
-    widget = info_widget or getattr(gui_instance, "info_text", None)
-    pbar = getattr(gui_instance, "progress_bar", None)
+    # ============================================================
+    # REFERENZEN / SPRACHE
+    # ============================================================
+    widget = info_widget or getattr(
+        gui_instance,
+        "info_text",
+        None
+    )
+
+    pbar = getattr(
+        gui_instance,
+        "progress_bar",
+        None
+    )
 
     lang = str(
         getattr(gui_instance, "LANG", "de")
@@ -4815,14 +5428,16 @@ def github_upload_oscam_emu_folder(
 
     is_de = lang == "de"
 
-    # ------------------------------------------------------------
-    # GitHub Ziel-Repository
-    # ------------------------------------------------------------
-    TARGET_REPO_URL = "https://github.com/speedy005/Oscam-emu.git"
+    # ============================================================
+    # GITHUB ZIEL
+    # ============================================================
+    TARGET_REPO_URL = (
+        "https://github.com/speedy005/Oscam-emu.git"
+    )
 
-    # ------------------------------------------------------------
-    # ProgressBar Style
-    # ------------------------------------------------------------
+    # ============================================================
+    # PROGRESSBAR STYLE
+    # ============================================================
     STYLE_BASE = """
         QProgressBar {{
             border: 2px solid #444444;
@@ -4852,114 +5467,381 @@ def github_upload_oscam_emu_folder(
 
     last_progress = 0
 
-    # ------------------------------------------------------------
-    # Übersetzung
-    # ------------------------------------------------------------
+    # ============================================================
+    # ÜBERSETZUNG
+    # ============================================================
     def tr(key, de_text, en_text):
-        texts = globals().get("TEXTS", {})
+
+        texts = globals().get(
+            "TEXTS",
+            {}
+        )
 
         try:
-            lang_dict = texts.get(lang, {})
-            value = lang_dict.get(key)
+
+            lang_dict = texts.get(
+                lang,
+                {}
+            )
+
+            value = lang_dict.get(
+                key
+            )
 
             if value:
                 return value
+
         except Exception:
             pass
 
-        return de_text if is_de else en_text
+        return (
+            de_text
+            if is_de
+            else en_text
+        )
 
-    # ------------------------------------------------------------
-    # ProgressBar
-    # ------------------------------------------------------------
-    def update_p(val, txt=None, is_err=False):
+    # ============================================================
+    # PROGRESSBAR
+    # ============================================================
+    def update_p(
+        val,
+        txt=None,
+        is_err=False
+    ):
+
         nonlocal last_progress
 
         last_progress = val
 
-        if pbar:
-            if is_err:
-                chunk = (
-                    "qlineargradient("
-                    "spread:pad, "
-                    "x1:0, y1:0, x2:1, y2:0, "
-                    "stop:0 #800000, "
-                    "stop:1 #FF0000)"
+        try:
+
+            if pbar:
+
+                if is_err:
+
+                    chunk = (
+                        "qlineargradient("
+                        "spread:pad, "
+                        "x1:0, y1:0, x2:1, y2:0, "
+                        "stop:0 #800000, "
+                        "stop:1 #FF0000)"
+                    )
+
+                    text_color = "#FF0000"
+
+                else:
+
+                    chunk = RAINBOW_GRADIENT
+                    text_color = "black"
+
+                pbar.setStyleSheet(
+                    STYLE_BASE.format(
+                        text_color=text_color,
+                        chunk_color=chunk
+                    )
                 )
-                text_color = "#FF0000"
-            else:
-                chunk = RAINBOW_GRADIENT
-                text_color = "black"
 
-            pbar.setStyleSheet(
-                STYLE_BASE.format(
-                    text_color=text_color,
-                    chunk_color=chunk
+                pbar.setValue(
+                    int(val)
                 )
-            )
 
-            pbar.setValue(int(val))
+                if txt:
+                    pbar.setFormat(
+                        txt
+                    )
+                else:
+                    pbar.setFormat(
+                        f"{val}%"
+                    )
 
-            if txt:
-                pbar.setFormat(txt)
-            else:
-                pbar.setFormat(f"{val}%")
+                pbar.show()
 
-            pbar.show()
+        except Exception:
+            pass
 
         if progress_callback:
+
             try:
-                progress_callback(val)
+                progress_callback(
+                    val
+                )
             except Exception:
                 pass
 
-        QApplication.processEvents()
-
-    # ------------------------------------------------------------
-    # Logging
-    # ------------------------------------------------------------
-    def log(text, level="info"):
         try:
-            if gui_instance and hasattr(gui_instance, "append_info"):
+            QApplication.processEvents()
+        except Exception:
+            pass
+
+    # ============================================================
+    # LOGGING
+    # ============================================================
+    def log(
+        text,
+        level="info"
+    ):
+
+        try:
+
+            if gui_instance and hasattr(
+                gui_instance,
+                "append_info"
+            ):
+
                 gui_instance.append_info(
                     widget,
                     text,
                     level
                 )
 
-            elif isinstance(widget, QTextEdit):
+            elif isinstance(
+                widget,
+                QTextEdit
+            ):
+
                 color = {
                     "success": "#39FF14",
                     "warning": "orange",
                     "error": "red"
-                }.get(level, "gray")
+                }.get(
+                    level,
+                    "gray"
+                )
 
                 widget.append(
-                    f'<span style="color:{color}">{text}</span>'
+                    f'<span style="color:{color}">'
+                    f'{text}'
+                    f'</span>'
                 )
 
         except Exception:
             pass
 
-        QApplication.processEvents()
-
-    # ------------------------------------------------------------
-    # Sound
-    # ------------------------------------------------------------
-    def play_sound(success=True):
         try:
+            QApplication.processEvents()
+        except Exception:
+            pass
+
+    # ============================================================
+    # SOUND
+    # ============================================================
+    def play_sound(
+        success=True
+    ):
+
+        try:
+
             if "safe_play" in globals():
+
                 safe_play(
                     "complete.oga"
                     if success
                     else "dialog-error.oga"
                 )
+
         except Exception:
             pass
 
-    # ------------------------------------------------------------
+    # ============================================================
+    # CREDENTIALS MASKIEREN
+    # ============================================================
+    def mask_sensitive(
+        text,
+        username="",
+        token=""
+    ):
+
+        if not text:
+            return ""
+
+        safe = str(text)
+
+        if token:
+            safe = safe.replace(
+                token,
+                "***TOKEN***"
+            )
+
+        if username and token:
+
+            safe = safe.replace(
+                f"{username}:{token}",
+                f"{username}:***TOKEN***"
+            )
+
+        return safe
+
+    # ============================================================
+    # GIT COMMAND HELPER
+    # ============================================================
+    def run_git(
+        args,
+        cwd,
+        env=None,
+        check=False
+    ):
+
+        return subprocess.run(
+            ["git"] + list(args),
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            check=check
+        )
+
+    # ============================================================
+    # ASKPASS VARIABLEN
+    # ============================================================
+    askpass_dir = None
+    askpass_script = None
+    askpass_launcher = None
+
+    # ============================================================
+    # ASKPASS ERSTELLEN
+    # ============================================================
+    def create_askpass():
+
+        nonlocal askpass_dir
+        nonlocal askpass_script
+        nonlocal askpass_launcher
+
+        askpass_dir = tempfile.mkdtemp(
+            prefix="oscam_git_"
+        )
+
+        # --------------------------------------------------------
+        # Python ASKPASS
+        # --------------------------------------------------------
+        askpass_script = os.path.join(
+            askpass_dir,
+            "askpass.py"
+        )
+
+        askpass_code = r'''import os
+import sys
+
+prompt = " ".join(sys.argv[1:]).lower()
+
+if "username" in prompt or "user" in prompt:
+    value = os.environ.get(
+        "OSC_GITHUB_USERNAME",
+        ""
+    )
+else:
+    value = os.environ.get(
+        "OSC_GITHUB_TOKEN",
+        ""
+    )
+
+sys.stdout.write(value)
+'''
+
+        with open(
+            askpass_script,
+            "w",
+            encoding="utf-8"
+        ) as f:
+
+            f.write(
+                askpass_code
+            )
+
+        # --------------------------------------------------------
+        # WINDOWS
+        # --------------------------------------------------------
+        if os.name == "nt":
+
+            askpass_launcher = os.path.join(
+                askpass_dir,
+                "askpass.cmd"
+            )
+
+            launcher_code = (
+                "@echo off\r\n"
+                f'"{sys.executable}" '
+                f'"{askpass_script}" %*\r\n'
+            )
+
+            with open(
+                askpass_launcher,
+                "w",
+                encoding="utf-8"
+            ) as f:
+
+                f.write(
+                    launcher_code
+                )
+
+        # --------------------------------------------------------
+        # LINUX / MACOS
+        # --------------------------------------------------------
+        else:
+
+            askpass_launcher = os.path.join(
+                askpass_dir,
+                "askpass.sh"
+            )
+
+            launcher_code = (
+                "#!/bin/sh\n"
+                f'exec "{sys.executable}" '
+                f'"{askpass_script}" "$@"\n'
+            )
+
+            with open(
+                askpass_launcher,
+                "w",
+                encoding="utf-8"
+            ) as f:
+
+                f.write(
+                    launcher_code
+                )
+
+            os.chmod(
+                askpass_launcher,
+                stat.S_IRUSR
+                | stat.S_IWUSR
+                | stat.S_IXUSR
+            )
+
+        return askpass_launcher
+
+    # ============================================================
+    # ASKPASS AUFRÄUMEN
+    # ============================================================
+    def cleanup_askpass():
+
+        nonlocal askpass_dir
+        nonlocal askpass_script
+        nonlocal askpass_launcher
+
+        try:
+
+            if (
+                askpass_dir
+                and os.path.isdir(askpass_dir)
+            ):
+
+                shutil.rmtree(
+                    askpass_dir,
+                    ignore_errors=True
+                )
+
+        except Exception:
+            pass
+
+        askpass_dir = None
+        askpass_script = None
+        askpass_launcher = None
+
+    # ============================================================
     # START
-    # ------------------------------------------------------------
+    # ============================================================
     update_p(
         5,
         tr(
@@ -4969,12 +5851,15 @@ def github_upload_oscam_emu_folder(
         )
     )
 
-    # ------------------------------------------------------------
-    # GitHub Config laden
-    # ------------------------------------------------------------
-    cfg_func = globals().get("load_github_config")
+    # ============================================================
+    # CONFIG LADEN
+    # ============================================================
+    cfg_func = globals().get(
+        "load_github_config"
+    )
 
     if not cfg_func:
+
         update_p(
             last_progress,
             tr(
@@ -4994,8 +5879,20 @@ def github_upload_oscam_emu_folder(
         return
 
     try:
+
         cfg = cfg_func()
+
+        if not isinstance(
+            cfg,
+            dict
+        ):
+
+            raise ValueError(
+                "GitHub-Konfiguration ist ungültig."
+            )
+
     except Exception as exc:
+
         update_p(
             last_progress,
             tr(
@@ -5007,25 +5904,47 @@ def github_upload_oscam_emu_folder(
         )
 
         log(
-            f"GitHub-Konfiguration konnte nicht geladen werden: {exc}",
+            "GitHub-Konfiguration konnte nicht geladen werden: "
+            + mask_sensitive(
+                str(exc)
+            ),
             "error"
         )
 
         play_sound(False)
         return
 
-    # ------------------------------------------------------------
-    # Credentials
-    # ------------------------------------------------------------
-    username = cfg.get("username")
-    token = cfg.get("token")
+    # ============================================================
+    # CREDENTIALS
+    # ============================================================
+    username = str(
+        cfg.get("username") or ""
+    ).strip()
 
-    user_name = cfg.get("user_name")
-    user_email = cfg.get("user_email")
+    token = str(
+        cfg.get("token") or ""
+    ).strip()
 
-    branch = cfg.get("emu_branch", "master")
+    user_name = str(
+        cfg.get("user_name") or ""
+    ).strip()
 
+    user_email = str(
+        cfg.get("user_email") or ""
+    ).strip()
+
+    branch = str(
+        cfg.get(
+            "emu_branch",
+            "master"
+        ) or "master"
+    ).strip()
+
+    # ============================================================
+    # CREDENTIALS PRÜFEN
+    # ============================================================
     if not username or not token:
+
         update_p(
             last_progress,
             tr(
@@ -5044,7 +5963,11 @@ def github_upload_oscam_emu_folder(
         play_sound(False)
         return
 
+    # ============================================================
+    # GIT USER PRÜFEN
+    # ============================================================
     if not user_name or not user_email:
+
         update_p(
             last_progress,
             tr(
@@ -5063,12 +5986,50 @@ def github_upload_oscam_emu_folder(
         play_sound(False)
         return
 
-    # ------------------------------------------------------------
-    # Lokales OSCam-EMU-Git-Verzeichnis
-    # ------------------------------------------------------------
-    target_dir = globals().get("PATCH_EMU_GIT_DIR")
+    # ============================================================
+    # BRANCH PRÜFEN
+    # ============================================================
+    if (
+        not branch
+        or any(
+            char in branch
+            for char in (
+                " ",
+                "\n",
+                "\r",
+                "\t"
+            )
+        )
+    ):
+
+        update_p(
+            last_progress,
+            (
+                "❌ Ungültiger Git-Branch"
+                if is_de
+                else
+                "❌ Invalid Git branch"
+            ),
+            is_err=True
+        )
+
+        log(
+            "Der konfigurierte Branch enthält ungültige Zeichen.",
+            "error"
+        )
+
+        play_sound(False)
+        return
+
+    # ============================================================
+    # LOKALES REPOSITORY
+    # ============================================================
+    target_dir = globals().get(
+        "PATCH_EMU_GIT_DIR"
+    )
 
     if not target_dir:
+
         update_p(
             last_progress,
             tr(
@@ -5087,9 +6048,16 @@ def github_upload_oscam_emu_folder(
         play_sound(False)
         return
 
-    target_dir = os.path.abspath(target_dir)
+    target_dir = os.path.abspath(
+        os.path.expanduser(
+            str(target_dir)
+        )
+    )
 
-    if not os.path.isdir(target_dir):
+    if not os.path.isdir(
+        target_dir
+    ):
+
         update_p(
             last_progress,
             tr(
@@ -5108,24 +6076,28 @@ def github_upload_oscam_emu_folder(
         play_sound(False)
         return
 
-    # ------------------------------------------------------------
-    # Sicherheits-Log
-    # ------------------------------------------------------------
+    # ============================================================
+    # SICHERHEITS-LOG
+    # ============================================================
     log(
         "GitHub-Ziel:"
     )
 
     log(
-        "https://github.com/speedy005/Oscam-emu.git"
+        TARGET_REPO_URL
     )
 
     log(
         f"Lokaler Ordner:\n{target_dir}"
     )
 
-    # ------------------------------------------------------------
-    # Git Setup
-    # ------------------------------------------------------------
+    log(
+        f"Branch: {branch}"
+    )
+
+    # ============================================================
+    # GIT SETUP
+    # ============================================================
     update_p(
         20,
         tr(
@@ -5140,117 +6112,227 @@ def github_upload_oscam_emu_folder(
         ".git"
     )
 
-    # ------------------------------------------------------------
-    # Authenticated HTTPS URL
-    # ------------------------------------------------------------
-    token_url = (
-        TARGET_REPO_URL.replace(
-            "https://",
-            f"https://{username}:{token}@"
-        )
-    )
-
+    # ============================================================
+    # AUTH ENVIRONMENT
+    # ============================================================
     silent_env = os.environ.copy()
-    silent_env["GIT_TERMINAL_PROMPT"] = "0"
 
+    silent_env[
+        "OSC_GITHUB_USERNAME"
+    ] = username
+
+    silent_env[
+        "OSC_GITHUB_TOKEN"
+    ] = token
+
+    silent_env[
+        "GIT_TERMINAL_PROMPT"
+    ] = "0"
+
+    silent_env[
+        "GIT_ASKPASS_REQUIRE"
+    ] = "force"
+
+    # Git kann diese Variable zusätzlich verwenden.
+    silent_env[
+        "GIT_USERNAME"
+    ] = username
+
+    # ============================================================
+    # ASKPASS ERSTELLEN
+    # ============================================================
     try:
 
-        # --------------------------------------------------------
-        # Repository initialisieren
-        # --------------------------------------------------------
-        if not os.path.exists(git_dir):
+        create_askpass()
+
+        silent_env[
+            "GIT_ASKPASS"
+        ] = askpass_launcher
+
+    except Exception as exc:
+
+        update_p(
+            last_progress,
+            tr(
+                "github_upload_failed",
+                "❌ Sichere Git-Authentifizierung konnte nicht vorbereitet werden",
+                "❌ Secure Git authentication could not be prepared"
+            ),
+            is_err=True
+        )
+
+        log(
+            f"ASKPASS-Fehler: {mask_sensitive(str(exc), username, token)}",
+            "error"
+        )
+
+        cleanup_askpass()
+        play_sound(False)
+        return
+
+    # ============================================================
+    # GIT OPERATIONEN
+    # ============================================================
+    try:
+
+        # ========================================================
+        # REPOSITORY INITIALISIEREN
+        # ========================================================
+        if not os.path.exists(
+            git_dir
+        ):
 
             log(
                 "Git-Repository wird initialisiert...",
                 "info"
             )
 
-            subprocess.run(
-                ["git", "init"],
+            run_git(
+                [
+                    "init"
+                ],
                 cwd=target_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
+                env=silent_env,
                 check=True
             )
 
-            subprocess.run(
+            # ----------------------------------------------------
+            # Remote OHNE TOKEN
+            # ----------------------------------------------------
+            run_git(
                 [
-                    "git",
                     "remote",
                     "add",
                     "origin",
-                    token_url
+                    TARGET_REPO_URL
                 ],
                 cwd=target_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
+                env=silent_env,
                 check=True
             )
 
-            subprocess.run(
+            # ----------------------------------------------------
+            # Branch erstellen
+            # ----------------------------------------------------
+            run_git(
                 [
-                    "git",
                     "checkout",
                     "-b",
                     branch
                 ],
                 cwd=target_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
+                env=silent_env,
                 check=True
             )
 
+        # ========================================================
+        # VORHANDENES REPOSITORY
+        # ========================================================
         else:
 
             log(
-                "Git-Remote wird aktualisiert...",
+                "Vorhandenes Git-Repository gefunden.",
                 "info"
             )
 
-            subprocess.run(
+            # ----------------------------------------------------
+            # Prüfen, ob origin existiert
+            # ----------------------------------------------------
+            remote_check = run_git(
                 [
-                    "git",
                     "remote",
-                    "remove",
+                    "get-url",
                     "origin"
                 ],
                 cwd=target_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace"
+                env=silent_env
             )
 
-            subprocess.run(
+            if remote_check.returncode == 0:
+
+                current_remote = (
+                    remote_check.stdout.strip()
+                )
+
+                # ------------------------------------------------
+                # Sicherheitsprüfung:
+                # Token darf niemals im Remote stehen.
+                # ------------------------------------------------
+                if token and token in current_remote:
+
+                    log(
+                        "⚠️ Unsicherer Token in Git-Remote erkannt. "
+                        "Remote wird ersetzt.",
+                        "warning"
+                    )
+
+                run_git(
+                    [
+                        "remote",
+                        "set-url",
+                        "origin",
+                        TARGET_REPO_URL
+                    ],
+                    cwd=target_dir,
+                    env=silent_env,
+                    check=True
+                )
+
+            else:
+
+                run_git(
+                    [
+                        "remote",
+                        "add",
+                        "origin",
+                        TARGET_REPO_URL
+                    ],
+                    cwd=target_dir,
+                    env=silent_env,
+                    check=True
+                )
+
+            # ----------------------------------------------------
+            # Prüfen, ob Branch existiert
+            # ----------------------------------------------------
+            branch_check = run_git(
                 [
-                    "git",
-                    "remote",
-                    "add",
-                    "origin",
-                    token_url
+                    "branch",
+                    "--list",
+                    branch
                 ],
                 cwd=target_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=True
+                env=silent_env
             )
 
-        # --------------------------------------------------------
-        # Git Config
-        # --------------------------------------------------------
+            if branch_check.stdout.strip():
+
+                run_git(
+                    [
+                        "checkout",
+                        branch
+                    ],
+                    cwd=target_dir,
+                    env=silent_env,
+                    check=True
+                )
+
+            else:
+
+                run_git(
+                    [
+                        "checkout",
+                        "-b",
+                        branch
+                    ],
+                    cwd=target_dir,
+                    env=silent_env,
+                    check=True
+                )
+
+        # ========================================================
+        # GIT CONFIG
+        # ========================================================
         update_p(
             35,
             tr(
@@ -5260,41 +6342,75 @@ def github_upload_oscam_emu_folder(
             )
         )
 
-        subprocess.run(
+        run_git(
             [
-                "git",
                 "config",
                 "user.name",
                 user_name
             ],
             cwd=target_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+            env=silent_env,
             check=True
         )
 
-        subprocess.run(
+        run_git(
             [
-                "git",
                 "config",
                 "user.email",
                 user_email
             ],
             cwd=target_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+            env=silent_env,
             check=True
         )
 
-        # --------------------------------------------------------
-        # Dateien hinzufügen
-        # --------------------------------------------------------
+        # ========================================================
+        # REMOTE NOCHMALS SICHERHEITSPRÜFEN
+        # ========================================================
+        remote_verify = run_git(
+            [
+                "remote",
+                "get-url",
+                "origin"
+            ],
+            cwd=target_dir,
+            env=silent_env
+        )
+
+        if remote_verify.returncode != 0:
+
+            raise RuntimeError(
+                "GitHub-Remote konnte nicht überprüft werden."
+            )
+
+        remote_url = (
+            remote_verify.stdout.strip()
+        )
+
+        if token and token in remote_url:
+
+            raise RuntimeError(
+                "Sicherheitsfehler: GitHub-Token "
+                "befindet sich in der Git-Remote-URL."
+            )
+
+        if username and token:
+
+            credential_string = (
+                f"{username}:{token}"
+            )
+
+            if credential_string in remote_url:
+
+                raise RuntimeError(
+                    "Sicherheitsfehler: "
+                    "Credentials befinden sich in der "
+                    "Git-Remote-URL."
+                )
+
+        # ========================================================
+        # DATEIEN HINZUFÜGEN
+        # ========================================================
         update_p(
             55,
             tr(
@@ -5308,44 +6424,123 @@ def github_upload_oscam_emu_folder(
             "Alle Dateien werden zu Git hinzugefügt..."
         )
 
-        subprocess.run(
-            ["git", "add", "."],
+        run_git(
+            [
+                "add",
+                "."
+            ],
             cwd=target_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+            env=silent_env,
             check=True
         )
 
-        # --------------------------------------------------------
-        # Commit-Nachricht
-        # --------------------------------------------------------
-        commit_msg_final = "Sync OSCam-Emu folder"
+        # ========================================================
+        # PRÜFEN, OB ES ÄNDERUNGEN GIBT
+        # ========================================================
+        staged_check = run_git(
+            [
+                "diff",
+                "--cached",
+                "--quiet"
+            ],
+            cwd=target_dir,
+            env=silent_env
+        )
+
+        if staged_check.returncode == 0:
+
+            final_txt = tr(
+                "github_upload_no_changes",
+                "ℹ️ Keine Änderungen vorhanden – kein Upload notwendig.",
+                "ℹ️ No changes detected – nothing to upload."
+            )
+
+            update_p(
+                100,
+                final_txt
+            )
+
+            log(
+                final_txt,
+                "warning"
+            )
+
+            play_sound(True)
+            return
+
+        if staged_check.returncode != 1:
+
+            error_text = (
+                staged_check.stderr.strip()
+                or staged_check.stdout.strip()
+                or "Git konnte den Änderungsstatus nicht prüfen."
+            )
+
+            error_text = mask_sensitive(
+                error_text,
+                username,
+                token
+            )
+
+            raise RuntimeError(
+                error_text
+            )
+
+        # ========================================================
+        # COMMIT-NACHRICHT
+        # ========================================================
+        commit_msg_final = (
+            "Sync OSCam-Emu folder"
+        )
 
         header_func = globals().get(
             "get_patch_header"
         )
 
         if header_func:
+
             try:
+
                 raw = header_func()
 
                 if raw:
+
                     first_line = raw.splitlines()
 
                     if first_line:
-                        commit_msg_final = (
+
+                        candidate = (
                             first_line[0].strip()
                         )
+
+                        if candidate:
+
+                            commit_msg_final = (
+                                candidate
+                            )
 
             except Exception:
                 pass
 
         # --------------------------------------------------------
-        # Commit
+        # Commit-Nachricht bereinigen
         # --------------------------------------------------------
+        commit_msg_final = (
+            commit_msg_final
+            .replace("\r", " ")
+            .replace("\n", " ")
+            .strip()
+        )
+
+        if not commit_msg_final:
+
+            commit_msg_final = (
+                "Sync OSCam-Emu folder"
+            )
+
+        # ========================================================
+        # COMMIT
+        # ========================================================
         update_p(
             70,
             tr(
@@ -5359,32 +6554,37 @@ def github_upload_oscam_emu_folder(
             f"Commit: {commit_msg_final}"
         )
 
-        commit = subprocess.run(
+        commit = run_git(
             [
-                "git",
                 "commit",
                 "-m",
-                commit_msg_final,
-                "--allow-empty"
+                commit_msg_final
             ],
             cwd=target_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             env=silent_env
         )
 
         if commit.returncode != 0:
-            log(
-                commit.stderr.strip(),
-                "warning"
+
+            commit_error = (
+                commit.stderr.strip()
+                or commit.stdout.strip()
+                or "Git Commit fehlgeschlagen."
             )
 
-        # --------------------------------------------------------
+            commit_error = mask_sensitive(
+                commit_error,
+                username,
+                token
+            )
+
+            raise RuntimeError(
+                f"Git Commit Fehler:\n{commit_error}"
+            )
+
+        # ========================================================
         # PUSH
-        # --------------------------------------------------------
+        # ========================================================
         update_p(
             85,
             tr(
@@ -5399,26 +6599,20 @@ def github_upload_oscam_emu_folder(
             "warning"
         )
 
-        push = subprocess.run(
+        push = run_git(
             [
-                "git",
                 "push",
-                "--force",
+                "--force-with-lease",
                 "origin",
                 branch
             ],
             cwd=target_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             env=silent_env
         )
 
-        # --------------------------------------------------------
+        # ========================================================
         # PUSH ERFOLGREICH
-        # --------------------------------------------------------
+        # ========================================================
         if push.returncode == 0:
 
             final_txt = tr(
@@ -5445,13 +6639,19 @@ def github_upload_oscam_emu_folder(
             play_sound(True)
             return
 
-        # --------------------------------------------------------
+        # ========================================================
         # PUSH FEHLER
-        # --------------------------------------------------------
+        # ========================================================
         error_text = (
             push.stderr.strip()
             or push.stdout.strip()
-            or "Unbekannter GitHub-Fehler"
+            or "Unbekannter GitHub-Fehler."
+        )
+
+        safe_error = mask_sensitive(
+            error_text,
+            username,
+            token
         )
 
         fail_txt = tr(
@@ -5467,15 +6667,59 @@ def github_upload_oscam_emu_folder(
         )
 
         log(
-            f"GitHub Error:\n{error_text}",
+            f"GitHub Error:\n{safe_error}",
             "error"
         )
 
         play_sound(False)
 
-    # ------------------------------------------------------------
-    # Allgemeiner Fehler
-    # ------------------------------------------------------------
+    # ============================================================
+    # GIT FEHLER
+    # ============================================================
+    except subprocess.CalledProcessError as exc:
+
+        error_text = (
+            getattr(
+                exc,
+                "stderr",
+                None
+            )
+            or getattr(
+                exc,
+                "stdout",
+                None
+            )
+            or str(exc)
+        )
+
+        safe_error = mask_sensitive(
+            error_text,
+            username,
+            token
+        )
+
+        fail_txt = tr(
+            "github_upload_failed",
+            "❌ GitHub-Upload fehlgeschlagen",
+            "❌ GitHub upload failed"
+        )
+
+        update_p(
+            last_progress,
+            fail_txt,
+            is_err=True
+        )
+
+        log(
+            f"Git-Fehler:\n{safe_error}",
+            "error"
+        )
+
+        play_sound(False)
+
+    # ============================================================
+    # ALLGEMEINER FEHLER
+    # ============================================================
     except Exception as exc:
 
         fail_txt = tr(
@@ -5490,12 +6734,58 @@ def github_upload_oscam_emu_folder(
             is_err=True
         )
 
+        safe_error = mask_sensitive(
+            str(exc),
+            username,
+            token
+        )
+
         log(
-            f"Kritischer Fehler:\n{exc}",
+            f"Kritischer Fehler:\n{safe_error}",
             "error"
         )
 
         play_sound(False)
+
+    # ============================================================
+    # CLEANUP
+    # ============================================================
+    finally:
+
+        # --------------------------------------------------------
+        # Token aus Environment-Dict entfernen
+        # --------------------------------------------------------
+        try:
+
+            silent_env.pop(
+                "OSC_GITHUB_TOKEN",
+                None
+            )
+
+            silent_env.pop(
+                "OSC_GITHUB_USERNAME",
+                None
+            )
+
+            silent_env.pop(
+                "GIT_USERNAME",
+                None
+            )
+
+            silent_env.pop(
+                "GIT_ASKPASS",
+                None
+            )
+
+        except Exception:
+            pass
+
+        # --------------------------------------------------------
+        # Temporäre ASKPASS-Dateien entfernen
+        # --------------------------------------------------------
+        cleanup_askpass()
+
+
 
 # =====================
 # GITHUB CONFIG DIALOG
@@ -5833,7 +7123,7 @@ class CinematicMatrixSplash(QWidget):
             r" █  |_|   |_||__| |__||_|  |__||__| |__||_______||_______||___|  |_|      █ ",
             r" █                                                                        █ ",
             r" █──────────────────[ SYSTEM: NEURAL_LINK OPERATIONAL ]───────────────────█ ",
-            r" █                   >> OSCAM EMU PATCH MANAGER v7.2.9  <<               █ ",
+            r" █                   >> OSCAM EMU PATCH MANAGER v7.4.0  <<               █ ",
             r" █             >> CODENAME: Speedy_Oscam-_Patch_Manager 2026 <<           █ ",
             r" ◥◣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◢◤ "
         ]
@@ -7976,29 +9266,109 @@ def create_patch(
 
     def validate_patch_with_git_apply(
         repo_dir,
-        patch_file
+        patch_file,
+        base_commit=None
     ):
+        """
+        Prüft einen Patch gegen den EXAKTEN Basis-Commit.
+
+        Niemals gegen den zufälligen aktuellen Working Tree prüfen:
+        genau das hatte zuvor den globals.h-Fehler verursacht.
+        """
 
         log(
-            "[PATCH] Prüfe Patch mit "
-            "git apply --check..."
+            "[PATCH] Prüfe Patch mit git apply --check..."
         )
 
-        run_git(
-            [
-                "apply",
-                "--check",
-                "--binary",
-                patch_file
-            ],
-            cwd=repo_dir,
-            check=True,
-            timeout=1200
-        )
+        validation_worktree = None
 
-        log(
-            "[PATCH] git apply --check: OK"
-        )
+        try:
+            if base_commit:
+                validation_worktree = tempfile.mkdtemp(
+                    prefix="oscam_patch_applycheck_"
+                )
+
+                # Das Zielverzeichnis wird von git worktree add angelegt.
+                # Daher den von mkdtemp erzeugten leeren Ordner entfernen.
+                shutil.rmtree(
+                    validation_worktree,
+                    ignore_errors=True
+                )
+
+                run_git(
+                    [
+                        "worktree",
+                        "add",
+                        "--detach",
+                        validation_worktree,
+                        base_commit
+                    ],
+                    cwd=repo_dir,
+                    check=True,
+                    timeout=1200
+                )
+
+                validation_cwd = validation_worktree
+            else:
+                validation_cwd = repo_dir
+
+            run_git(
+                [
+                    "apply",
+                    "--check",
+                    "--binary",
+                    patch_file
+                ],
+                cwd=validation_cwd,
+                check=True,
+                timeout=1200
+            )
+
+            if base_commit:
+                log(
+                    "[PATCH] git apply --check: OK "
+                    f"(Basis {base_commit})"
+                )
+            else:
+                log(
+                    "[PATCH] git apply --check: OK"
+                )
+
+        finally:
+            if validation_worktree:
+                try:
+                    run_git(
+                        [
+                            "worktree",
+                            "remove",
+                            "--force",
+                            validation_worktree
+                        ],
+                        cwd=repo_dir,
+                        check=False,
+                        timeout=1200
+                    )
+                except Exception:
+                    pass
+
+                shutil.rmtree(
+                    validation_worktree,
+                    ignore_errors=True
+                )
+
+                try:
+                    run_git(
+                        [
+                            "worktree",
+                            "prune"
+                        ],
+                        cwd=repo_dir,
+                        check=False,
+                        timeout=1200
+                    )
+                except Exception:
+                    pass
+
 
     # ============================================================
     # Patch gegen Zielzustand validieren
@@ -8288,8 +9658,24 @@ def create_patch(
 
         emu_repo_url, emu_repo_branch = get_emu_repository_config()
 
+        # Die im GUI gewählte OSCam-Emu-Repo ist immer die verbindliche
+        # Quelle für Create Patch. Eine ältere gespeicherte Config darf
+        # die aktuelle Auswahl niemals überschreiben.
         if gui_instance is not None:
             try:
+                gui_repo_url = str(
+                    getattr(gui_instance, "selected_emu_repo_url", "") or
+                    getattr(gui_instance, "EMUREPO", "") or ""
+                ).strip()
+                if gui_repo_url:
+                    emu_repo_url = gui_repo_url
+
+                gui_branch = str(
+                    getattr(gui_instance, "selected_emu_repo_branch", "") or ""
+                ).strip()
+                if gui_branch:
+                    emu_repo_branch = gui_branch
+
                 gui_instance.selected_emu_repo_url = emu_repo_url
                 gui_instance.selected_emu_repo_branch = emu_repo_branch
             except Exception:
@@ -8616,13 +10002,147 @@ def create_patch(
         )
 
         # ========================================================
-        # OSCam-Emu aktualisieren
+        # OSCam-Emu-Basis bestimmen
+        #
+        # Wenn über "OSCam-Emu Revision" ein Commit ausgewählt wurde,
+        # wird EXAKT dieser Commit verwendet. Andernfalls bleibt das
+        # bisherige Branch-Verhalten unverändert.
         # ========================================================
 
-        emu_commit = update_emu_repository(
-            emu_dir,
-            emu_repo_branch
-        )
+        selected_emu_commit = None
+
+        if gui_instance is not None:
+            selected_emu_commit = getattr(
+                gui_instance,
+                "selected_emu_commit",
+                None
+            )
+
+        if not selected_emu_commit:
+            selected_emu_commit = globals().get(
+                "SELECTED_EMU_COMMIT"
+            )
+
+        selected_emu_commit = str(
+            selected_emu_commit or ""
+        ).strip().lower()
+
+        # Eine gespeicherte Revision gehört immer zu genau der Repo-URL,
+        # aus der sie ausgewählt wurde. Nach einem Wechsel über den
+        # "Repo URL"-Button wird deshalb niemals eine alte SHA verwendet.
+        selected_emu_commit_repo_url = ""
+        if gui_instance is not None:
+            selected_emu_commit_repo_url = str(
+                getattr(gui_instance, "selected_emu_commit_repo_url", "") or ""
+            ).strip()
+        if not selected_emu_commit_repo_url:
+            selected_emu_commit_repo_url = str(
+                globals().get("SELECTED_EMU_COMMIT_REPO_URL", "") or ""
+            ).strip()
+
+        if selected_emu_commit and selected_emu_commit_repo_url:
+            if selected_emu_commit_repo_url.rstrip("/") != emu_repo_url.rstrip("/"):
+                log(
+                    "[OSCAM-EMU] Die gespeicherte Revision gehört zu einer "
+                    "anderen Repo-URL – Auswahl wird verworfen.\n"
+                )
+                selected_emu_commit = ""
+                if gui_instance is not None:
+                    gui_instance.selected_emu_commit = None
+                    gui_instance.selected_emu_commit_repo_url = ""
+                globals()["SELECTED_EMU_COMMIT"] = ""
+                globals()["SELECTED_EMU_COMMIT_REPO_URL"] = ""
+
+        if selected_emu_commit:
+            if not re.fullmatch(
+                r"[0-9a-f]{40}",
+                selected_emu_commit
+            ):
+                raise RuntimeError(
+                    "Die ausgewählte OSCam-Emu-Revision ist keine "
+                    "gültige 40-stellige Git-SHA."
+                )
+
+            log("[OSCAM-EMU] Verwende manuell ausgewählte Basis-Revision:")
+            log(f"             {selected_emu_commit}")
+
+            local_emu_commit = run_git(
+                [
+                    "rev-parse",
+                    "--verify",
+                    selected_emu_commit + "^{commit}"
+                ],
+                cwd=emu_dir,
+                check=False,
+                timeout=60
+            ).strip()
+
+            if local_emu_commit != selected_emu_commit:
+                run_git(
+                    [
+                        "fetch",
+                        "origin",
+                        selected_emu_commit
+                    ],
+                    cwd=emu_dir,
+                    check=True,
+                    timeout=1200
+                )
+
+                local_emu_commit = run_git(
+                    [
+                        "rev-parse",
+                        "--verify",
+                        selected_emu_commit + "^{commit}"
+                    ],
+                    cwd=emu_dir,
+                    check=False,
+                    timeout=60
+                ).strip()
+
+            if local_emu_commit != selected_emu_commit:
+                raise RuntimeError(
+                    "Die ausgewählte OSCam-Emu-Revision konnte "
+                    "nicht lokal bereitgestellt werden."
+                )
+
+            checked_out_emu = run_git(
+                [
+                    "rev-parse",
+                    "HEAD"
+                ],
+                cwd=emu_dir,
+                check=False,
+                timeout=60
+            ).strip()
+
+            if checked_out_emu != selected_emu_commit:
+                run_git(
+                    [
+                        "checkout",
+                        "--detach",
+                        selected_emu_commit
+                    ],
+                    cwd=emu_dir,
+                    check=True,
+                    timeout=1200
+                )
+
+            emu_commit = selected_emu_commit
+
+        else:
+            # Keine manuelle OSCam-Emu-Auswahl:
+            # immer den aktuellen Stand des über "Repo URL" gewählten
+            # Repositories/Branches verwenden. Damit ist Create Patch
+            # niemals von einer alten lokalen Revision abhängig.
+            log(
+                "[OSCAM-EMU] Keine feste Revision ausgewählt – "
+                "verwende den aktuellen Stand des aktiven Repositories."
+            )
+            emu_commit = update_emu_repository(
+                emu_dir,
+                emu_repo_branch
+            )
 
         log(
             "[OSCAM-EMU] Commit:"
@@ -8632,10 +10152,10 @@ def create_patch(
             f"             {emu_commit}"
         )
 
-        # Der Patch soll in globals.h exakt die im Tool ausgewählte
-        # OSCam-Emu-Repo-URL zeigen, nicht eine alte URL, die zufällig
-        # im Quell-Repository hinterlegt ist.
-        normalize_emu_metadata(emu_dir, emu_repo_url)
+        # Die URL-Normalisierung erfolgt weiter unten ausschließlich in
+        # einem temporären Ziel-Worktree. Das eigentliche OSCam-Emu-Repo
+        # bleibt dadurch sauber und der Patch bekommt nur die beabsichtigte
+        # Metadatenänderung.
 
         set_progress(
             40,
@@ -8820,17 +10340,31 @@ def create_patch(
             "        Modus  : git diff --binary --full-index"
         )
 
-        with open(
-            patch_file,
-            "w",
-            encoding="utf-8",
-            newline=""
-        ) as patch_output:
+        target_worktree_for_patch = None
 
-            git_executable = (
-                find_git_executable()
+        try:
+            # Exakten OSCam-Emu-Zielcommit auschecken und NUR dort die
+            # beabsichtigten SCM_URL/BOARD_URL-Anpassungen durchführen.
+            # Damit ist der Patch reproduzierbar: Basis = stream_commit,
+            # Ziel = emu_commit plus genau diese Metadatenänderung.
+            target_worktree_for_patch = prepare_validation_target(
+                emu_dir,
+                emu_commit,
+                emu_repo_url
             )
 
+            log(
+                "[PATCH] Temporärer exakter Ziel-Worktree vorbereitet:"
+            )
+            log(
+                f"        {target_worktree_for_patch}"
+            )
+
+            git_executable = find_git_executable()
+
+            # Diff gegen den exakten Basis-Commit und den vorbereiteten
+            # Ziel-Working-Tree. Die Metadatenänderung bleibt Bestandteil
+            # des Patches, ohne den echten OSCam-Emu-Checkout zu verändern.
             result = subprocess.run(
                 [
                     git_executable,
@@ -8840,18 +10374,54 @@ def create_patch(
                     stream_commit,
                     "--"
                 ],
-                cwd=emu_dir,
-                stdout=patch_output,
+                cwd=target_worktree_for_patch,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
+                check=False,
                 timeout=1200
             )
 
-        stderr = (
-            result.stderr or ""
-        ).strip()
+            patch_bytes = result.stdout or b""
+
+            # Binär-Patches niemals über Text-Encoding schreiben.
+            with open(patch_file, "wb") as binary_patch_output:
+                binary_patch_output.write(patch_bytes)
+
+            stderr = (
+                result.stderr or b""
+            ).decode("utf-8", errors="replace").strip()
+
+        finally:
+            if target_worktree_for_patch:
+                try:
+                    run_git(
+                        [
+                            "worktree",
+                            "remove",
+                            "--force",
+                            target_worktree_for_patch
+                        ],
+                        cwd=emu_dir,
+                        check=False,
+                        timeout=1200
+                    )
+                except Exception:
+                    pass
+
+                shutil.rmtree(
+                    target_worktree_for_patch,
+                    ignore_errors=True
+                )
+
+                try:
+                    run_git(
+                        ["worktree", "prune"],
+                        cwd=emu_dir,
+                        check=False,
+                        timeout=1200
+                    )
+                except Exception:
+                    pass
 
         if result.returncode != 0:
 
@@ -8898,7 +10468,8 @@ def create_patch(
 
         validate_patch_with_git_apply(
             stream_dir,
-            patch_file
+            patch_file,
+            base_commit=stream_commit
         )
 
         set_progress(
@@ -9042,7 +10613,8 @@ def create_patch(
 
         validate_patch_with_git_apply(
             stream_dir,
-            patch_file
+            patch_file,
+            base_commit=stream_commit
         )
 
         set_progress(
@@ -9124,6 +10696,16 @@ def create_patch(
         log(
             f"OSCam-Emu Commit:        {emu_commit}"
         )
+
+        # Nach dem Build zeigen die Revisions-Buttons exakt die beiden
+        # Commits, die tatsächlich für diesen oscam-emu.patch verwendet wurden.
+        if gui_instance is not None:
+            try:
+                gui_instance.display_streamboard_commit = stream_commit
+                gui_instance.display_emu_commit = emu_commit
+                gui_instance.update_revision_button_labels()
+            except Exception:
+                pass
 
         log(
             f"OSCam-Emu URL:           {emu_repo_url}"
@@ -11905,6 +13487,23 @@ class PatchManagerGUI(QWidget):
         self.all_buttons = []
         self.option_buttons = {}
         self.buttons = {}
+
+        # Keine feste Revision beim Programmstart.
+        # Create Patch verwendet dadurch automatisch den aktuellen
+        # Streamboard-HEAD und den aktuellen Stand des gewählten
+        # OSCam-Emu-Repositories, solange der Benutzer nichts auswählt.
+        self.selected_streamboard_commit = None
+        self.selected_emu_commit = None
+        self.selected_emu_commit_repo_url = ""
+        # Nur Anzeige des zuletzt tatsächlich gebauten Patches.
+        # Diese Werte sind KEINE feste Auswahl und werden bei Create Patch
+        # nicht als Basis erzwungen.
+        self.display_streamboard_commit = None
+        self.display_emu_commit = None
+        globals()["SELECTED_STREAMBOARD_COMMIT"] = ""
+        globals()["SELECTED_EMU_COMMIT"] = ""
+        globals()["SELECTED_EMU_COMMIT_REPO_URL"] = ""
+
         self._blink_state = True
 
         super().__init__()
@@ -11954,6 +13553,16 @@ class PatchManagerGUI(QWidget):
 
         stored_lang = str(self.current_config.get("language", "de")).lower()
         self.LANG = stored_lang if stored_lang in ["en", "de"] else "de"
+
+        # TEXT muss VOR init_ui() verfügbar sein.
+        # init_ui() erzeugt bereits Buttons/Labels und verwendet dafür
+        # self.TEXT.get(...). update_language() wird erst nach init_ui()
+        # aufgerufen und kann daher nicht die Erstinitialisierung übernehmen.
+        self.TEXT = TEXTS.get(
+            self.LANG,
+            TEXTS.get("en", {})
+        )
+
         self.patch_modifier = self.current_config.get("patch_modifier", "Default")
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
         self.PLUGIN_DIR = self.base_dir  # Arbeitsordner
@@ -17790,6 +19399,16 @@ class PatchManagerGUI(QWidget):
         self.selected_emu_repo_branch = str(
             getattr(self, "selected_emu_repo_branch", "master") or "master"
         ).strip() or "master"
+
+        # Eine OSCam-Emu-Revision gehört immer zu genau EINEM Repository.
+        # Wird über "Repo URL" das Repository gewechselt, darf eine zuvor
+        # ausgewählte SHA aus dem alten Repository nicht weiterverwendet werden.
+        self.selected_emu_commit = None
+        self.selected_emu_commit_repo_url = ""
+        self.display_emu_commit = None
+        globals()["SELECTED_EMU_COMMIT"] = ""
+        globals()["SELECTED_EMU_COMMIT_REPO_URL"] = ""
+
         globals()["EMUREPO"] = new_url
         globals()["SELECTED_EMU_REPO_URL"] = new_url
         globals()["SELECTED_EMU_REPO_BRANCH"] = self.selected_emu_repo_branch
@@ -17806,8 +19425,20 @@ class PatchManagerGUI(QWidget):
             pbar.setFormat(("✅ OSCam-Emu Git gesetzt: %p%" if is_de else "✅ OSCam-Emu Git selected: %p%"))
             pbar.show()
             QTimer.singleShot(2500,getattr(self,"pbar_idle",lambda:pbar.setValue(0)))
+        # Nach einem Repo-Wechsel die Revision-Anzeige sofort auf den
+        # aktuellen Stand des neu gewählten OSCam-Emu-Repositories setzen.
+        try:
+            self.update_revision_button_labels()
+        except Exception:
+            pass
+
         if hasattr(self,"info_text"):
             self.info_text.append(f"<b>✅ OSCam-Emu Git:</b> {new_url}")
+            self.info_text.append(
+                "<b>ℹ️ OSCam-Emu Revision:</b> Auswahl zurückgesetzt – "
+                "beim nächsten Create Patch wird der aktuelle Branch-Stand "
+                "dieses Repositories verwendet."
+            )
             self.info_text.ensureCursorVisible()
         return True
     def change_modifier_name(self):
@@ -17958,16 +19589,19 @@ class PatchManagerGUI(QWidget):
                 current_diff_colors = DIFF_COLORS[theme_name]
 
             new_cfg = {
-                "theme": theme_name,
+                # "color" ist der kanonische Schlüssel in load_config().
+                "color": theme_name,
                 "commit_count": int(self.commit_spin.value()),
-                "language": self.language_box.currentText(),
-                "work_dir": "/opt/s3_neu/support/patches",
-                "s3_patch_path": "/opt/s3_neu/support/patches",
-                "tools_ok": True,
+                "language": str(self.language_box.currentText()).lower()[:2],
+                "work_dir": getattr(self, "WORK_DIR", self.base_dir),
+                "s3_patch_path": getattr(
+                    self, "OLD_PATCH_DIR", self.current_config.get("s3_patch_path", self.base_dir)
+                ),
             }
 
-            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(new_cfg, f, indent=4, ensure_ascii=False)
+            # Niemals die komplette Config mit einem Teil-Dictionary überschreiben.
+            # save_config merged die Änderungen mit den vorhandenen Einstellungen.
+            save_config(new_cfg, gui_instance=self, silent=True)
 
             # UI sofort neu färben
             self.repaint_ui_colors()
@@ -18848,6 +20482,116 @@ class PatchManagerGUI(QWidget):
 
         return f"#{r:02X}{g:02X}{b:02X}"
 
+    def update_revision_button_labels(self):
+        """
+        Aktualisiert die beiden Revisions-Buttons mit der Versionsnummer aus
+        globals.h des aktuell verwendeten Git-Commits.
+
+        Beispiel:
+            Streamboard Revision (11968)
+            OSCam-Emu Revision (11968)
+
+        Die ermittelte Revisionsnummer wird zusätzlich im GUI-Objekt
+        gespeichert. Dadurch bleibt die Anzeige auch nach einem
+        Sprachwechsel erhalten, selbst wenn globals.h kurzfristig nicht
+        erneut gelesen werden kann.
+        """
+        import os
+        import re
+
+        def revision_for(repo_dir, selected_commit=None, cache_attr=None):
+            repo_dir = os.path.abspath(str(repo_dir or "").strip())
+            commit = str(selected_commit or "").strip()
+
+            if not commit and repo_dir and os.path.isdir(os.path.join(repo_dir, ".git")):
+                try:
+                    result = git_command(["rev-parse", "HEAD"], cwd=repo_dir)
+                    commit = (result.stdout or "").strip()
+                except Exception:
+                    commit = ""
+
+            revision = ""
+
+            # Die Version wird immer aus globals.h des exakt verwendeten
+            # Commits gelesen, nicht aus einer eventuell alten Arbeitsdatei.
+            if repo_dir and commit and os.path.isdir(os.path.join(repo_dir, ".git")):
+                try:
+                    version = str(get_oscam_version(repo_dir, commit) or "").strip()
+                except Exception:
+                    version = ""
+
+                if version:
+                    # Üblicher OSCam-Wert: 2.xx.xx-11968
+                    match = re.search(r"(?:^|[-_.])([0-9]+)$", version)
+                    if match:
+                        revision = match.group(1)
+                    else:
+                        # Falls globals.h nur eine reine Revisionsnummer enthält.
+                        match = re.fullmatch(r"[0-9]+", version)
+                        if match:
+                            revision = version
+
+            # Letzten erfolgreichen Wert behalten, damit ein Sprachwechsel
+            # oder ein kurzzeitig nicht lesbares Repository die Anzeige nicht
+            # verschwinden lässt.
+            if revision:
+                if cache_attr:
+                    setattr(self, cache_attr, revision)
+            elif cache_attr:
+                revision = str(getattr(self, cache_attr, "") or "").strip()
+
+            return revision
+
+        stream_revision = revision_for(
+            globals().get("STREAMREPO", ""),
+            (
+                getattr(self, "selected_streamboard_commit", None)
+                or getattr(self, "display_streamboard_commit", None)
+            ),
+            "streamboard_revision_number",
+        )
+
+        emu_dir = globals().get("PATCH_EMU_GIT_DIR", "")
+        if not emu_dir:
+            emu_dir = getattr(self, "PATCH_EMU_GIT_DIR", "")
+
+        emu_revision = revision_for(
+            emu_dir,
+            (
+                getattr(self, "selected_emu_commit", None)
+                or getattr(self, "display_emu_commit", None)
+            ),
+            "emu_revision_number",
+        )
+
+        def set_revision(key, base_text, revision):
+            entry = getattr(self, "option_buttons", {}).get(key)
+            if not entry:
+                return
+
+            btn = entry[0] if isinstance(entry, tuple) else entry
+            text = base_text
+            if revision:
+                text = f"{base_text} ({revision})"
+
+            btn.setText(text)
+            btn.setProperty("revision_number", revision or "")
+            btn.setProperty("base_text", base_text)
+
+        # Die Bezeichnungen sind sprachunabhängig identisch. Wichtig ist,
+        # dass nur der Text vor der Klammer übersetzt würde; die Revision
+        # selbst bleibt unverändert erhalten.
+        set_revision(
+            "streamboard_checkout",
+            "Streamboard Revision",
+            stream_revision,
+        )
+        set_revision(
+            "oscam_emu_revision",
+            "OSCam-Emu Revision",
+            emu_revision,
+        )
+
     def setup_option_buttons(self, parent_layout):
         """Erstellt die mittleren Buttons mit HTML-Tooltips, Regenbogen-Progress und Sound."""
         from PyQt6.QtWidgets import (
@@ -19004,6 +20748,16 @@ class PatchManagerGUI(QWidget):
                 "SP_DialogOpenButton",
                 "📌 <b>Streamboard Revision:</b> Beliebigen Streamboard-Commit als Patch-Basis auswählen.",
                 "📌 <b>Streamboard Revision:</b> Select any Streamboard commit as the patch base.",
+            ),
+            (
+                "oscam_emu_revision",
+                "OSCam-Emu Revision",
+                "#00BFFF",
+                self.checkout_emu_revision,
+                "white",
+                "SP_DialogOpenButton",
+                "📌 <b>OSCam-Emu Revision:</b> Beliebigen OSCam-Emu-Commit als Patch-Basis auswählen.",
+                "📌 <b>OSCam-Emu Revision:</b> Select any OSCam-Emu commit as the patch base.",
             ),
         ]
 
@@ -19264,6 +21018,9 @@ class PatchManagerGUI(QWidget):
         # ---------------------------------------------------------
         parent_layout.addWidget(container)
 
+        # Revisions direkt im Button anzeigen, z. B. "Streamboard Revision (11968)".
+        self.update_revision_button_labels()
+
     def update_all_texts(self):
         # ---------------------------------------------------------
         # LABELS
@@ -19287,12 +21044,15 @@ class PatchManagerGUI(QWidget):
         # ---------------------------------------------------------
         # OPTION BUTTONS
         # ---------------------------------------------------------
-        for btn, text_key in self.option_buttons.values():
+        for key, (btn, text_key) in self.option_buttons.items():
 
             new_text = self.get_t(text_key, text_key)
 
             btn.setText(new_text)
             btn.setProperty("text_key", text_key)
+
+        # Revisions-Suffix nach dem Sprachwechsel wieder ergänzen.
+        self.update_revision_button_labels()
 
         # ---------------------------------------------------------
         # GRID BUTTONS / PATCH AKTIONEN
@@ -19814,19 +21574,28 @@ class PatchManagerGUI(QWidget):
         QApplication.processEvents()
 
     def commit_value_changed(self, value):
-        # 1. Im Dict speichern (hast du bereits)
-        self.cfg["commit_count"] = value
+        """Speichert die Commit-Anzahl über den zentralen Config-Manager."""
+        try:
+            value = max(1, min(int(value), 1000))
+            saved = save_config(
+                {"commit_count": value},
+                gui_instance=self,
+                silent=True,
+            )
+            if not saved:
+                raise RuntimeError("Die Konfiguration konnte nicht gespeichert werden.")
 
-        # 2. In die Datei schreiben (WICHTIG!)
-        if hasattr(self, "save_config"):
-            self.save_config()
-
-        # 3. Rückmeldung geben
-        self.append_info(
-            self.info_text,
-            f"Commit-Anzahl auf {value} gesetzt (gespeichert)",
-            "success",
-        )
+            self.append_info(
+                self.info_text,
+                f"Commit-Anzahl auf {value} gesetzt (gespeichert)",
+                "success",
+            )
+        except Exception as exc:
+            self.append_info(
+                self.info_text,
+                f"❌ Fehler beim Speichern der Commit-Anzahl: {exc}",
+                "error",
+            )
 
     def change_old_patch_dir(self, info_widget=None, progress_callback=None):
         """
@@ -20104,8 +21873,10 @@ class PatchManagerGUI(QWidget):
         self.S4_PATH = os.path.normpath(str(s4_path))
         self.NCAM_PATH = os.path.normpath(str(ncam_path))
         
-        # Falls die GUI-Instanz ihre Config verloren hat, biegen wir das hier auch direkt wieder gerade
+        # Falls die GUI-Instanz ihre Config verloren hat, biegen wir beide
+        # Referenzen auf dasselbe Dictionary zurück.
         self.current_config = file_cfg
+        self.cfg = file_cfg
 
         # 4. Buttons mit den physikalisch echten Pfaden füttern und färben
         apply_s3_btn_logic(getattr(self, "btn_s3", None), self.S3_PATH, "S3")
@@ -21833,8 +23604,95 @@ class PatchManagerGUI(QWidget):
             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight
         )
 
-        # 1. Log-Button
+        # --- INSTALLATION / PATCH-BEREICH ZWISCHEN LABEL/LOG ---
         lang = getattr(self, "LANG", "de").lower()
+        # Zwei Spalten: links die Patch-Ordner, rechts die Patch-Kopieraktionen.
+        install_path_container = QWidget()
+        install_path_layout = QHBoxLayout(install_path_container)
+        install_path_layout.setContentsMargins(0, 0, 0, 0)
+        install_path_layout.setSpacing(8)
+        install_path_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        path_button_column = QWidget()
+        path_button_layout = QVBoxLayout(path_button_column)
+        path_button_layout.setContentsMargins(0, 0, 0, 0)
+        path_button_layout.setSpacing(3)
+
+        patch_button_column = QWidget()
+        patch_button_layout = QVBoxLayout(patch_button_column)
+        patch_button_layout.setContentsMargins(0, 0, 0, 0)
+        patch_button_layout.setSpacing(3)
+
+        self.header_btn_s3_ncam = QPushButton(self.TEXT.get("patch_folder_s3_ncam", "S3-NCam-Bonecrew-Pfad"))
+        self.header_btn_s3_ncam.setMinimumSize(350, 32)
+        self.header_btn_s3_ncam.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self.header_btn_s3_ncam.setToolTip(
+            self.TEXT.get("patch_folder_s3_ncam_tooltip", "S3-NCam-Bonecrew-Pfad wählen")
+        )
+        self.header_btn_s3_ncam.clicked.connect(self.select_ncam_patch_path_manually)
+        path_button_layout.addWidget(self.header_btn_s3_ncam)
+
+        self.header_btn_s4 = QPushButton(self.TEXT.get("patch_folder_s4", "S4-Pfad"))
+        self.header_btn_s4.setMinimumSize(350, 32)
+        self.header_btn_s4.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self.header_btn_s4.setToolTip(
+            self.TEXT.get("patch_folder_s4_tooltip", "S4-Pfad wählen")
+        )
+        self.header_btn_s4.clicked.connect(self.select_s4_patch_path_manually)
+        path_button_layout.addWidget(self.header_btn_s4)
+
+        # Die beiden Patch-Kopieraktionen ebenfalls untereinander.
+        self.header_btn_patch_ncam = QPushButton(self.TEXT.get("patch_copy_s3_ncam", "Patch → S3-NCam"))
+        self.header_btn_patch_ncam.setMinimumSize(205, 32)
+        self.header_btn_patch_ncam.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self.header_btn_patch_ncam.clicked.connect(
+            lambda checked=False: self.copy_patch_to_target("ncam")
+        )
+        patch_button_layout.addWidget(self.header_btn_patch_ncam)
+
+        self.header_btn_patch_s4 = QPushButton(self.TEXT.get("patch_copy_s4", "Patch → S4"))
+        self.header_btn_patch_s4.setMinimumSize(205, 32)
+        self.header_btn_patch_s4.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self.header_btn_patch_s4.clicked.connect(
+            lambda checked=False: self.copy_patch_to_target("s4")
+        )
+        patch_button_layout.addWidget(self.header_btn_patch_s4)
+
+        install_path_layout.addWidget(path_button_column)
+        install_path_layout.addWidget(patch_button_column)
+
+        # Kompakte, zum bestehenden Header passende Optik.
+        for _btn in (
+            self.header_btn_s3_ncam,
+            self.header_btn_s4,
+            self.header_btn_patch_ncam,
+            self.header_btn_patch_s4,
+        ):
+            _btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            _btn.setStyleSheet("""
+                QPushButton {
+                    color: #EAFF00;
+                    background-color: #3d3d3d;
+                    border: 1px solid #555;
+                    border-radius: 7px;
+                    padding: 2px 8px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #4d4d4d;
+                    border: 1px solid #EAFF00;
+                    color: white;
+                }
+                QPushButton:pressed {
+                    background-color: #222;
+                    border: 1px solid white;
+                }
+            """)
+
+        # Genau zwischen dem mittleren Header-Bereich und dem Log-Button.
+        header_layout.addWidget(install_path_container, 0)
+
+        # 1. Log-Button
         log_text = "Log speichern" if lang == "de" else "Save Log"
         self.log_button = QPushButton(f" {log_text}")
         self.log_button.setMinimumHeight(40)
@@ -22373,9 +24231,10 @@ class PatchManagerGUI(QWidget):
         """
         )
 
+        # Signal wurde bereits einmalig oben verbunden.
         saved_commits = self.cfg.get("commit_count", 10)
-        self.commit_spin.setValue(saved_commits)
-        self.commit_spin.valueChanged.connect(self.commit_value_changed)
+        if int(self.commit_spin.value()) != int(saved_commits):
+            self.commit_spin.setValue(saved_commits)
 
         self.btn_check_tools = QPushButton(
             self.get_t("check_tools_button", "🛠️ Tools prüfen")
@@ -22780,9 +24639,9 @@ class PatchManagerGUI(QWidget):
         QApplication.processEvents()  # WICHTIG: Berechnet die 60px Höhe vor dem ersten Klick
         self.updateGeometry()  # Stabilisiert das FlowLayout
 
-        # 4. Signale verbinden
-        self.color_box.currentTextChanged.connect(self.collect_and_save)
-        self.commit_spin.valueChanged.connect(self.collect_and_save)
+        # 4. Signale sind bereits an den jeweiligen Handlern verbunden:
+        #    Farbe -> change_colors(), Commits -> commit_value_changed().
+        #    Keine zweite Verbindung hier, damit kein doppeltes Speichern/Feedback entsteht.
 
         # 5. System-Check mit kleiner Verzögerung starten
         # Wir definieren das Design zentral für ALLE Buttons der App
@@ -22811,8 +24670,10 @@ class PatchManagerGUI(QWidget):
                 try:
                     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                         self.current_config = json.load(f)
+                    self.cfg = self.current_config
                 except:
                     self.current_config = {}
+                    self.cfg = self.current_config
 
         cfg = getattr(self, "current_config", {})
         saved_theme = cfg.get("theme_mode", "standard")
@@ -23216,6 +25077,8 @@ class PatchManagerGUI(QWidget):
                 )
 
             self.selected_streamboard_commit = selected
+            self.display_streamboard_commit = selected
+            self.update_revision_button_labels()
             # Für bestehende externe Helfer ebenfalls global verfügbar machen.
             globals()["SELECTED_STREAMBOARD_COMMIT"] = selected
 
@@ -23258,6 +25121,434 @@ class PatchManagerGUI(QWidget):
                 QMessageBox.critical(
                     self,
                     "Streamboard Git",
+                    f"Fehler:\n{exc}"
+                )
+            except Exception:
+                pass
+            return False
+
+    def checkout_emu_revision(self):
+        """
+        Wählt eine beliebige OSCam-Emu-Git-Revision aus und checkt sie
+        im lokalen PATCH_EMU_GIT_DIR als detached HEAD aus.
+
+        Das Verhalten entspricht dem Streamboard-Revisionsdialog:
+        - letzte 100 Commits anzeigen
+        - Commit per Liste oder vollständiger SHA auswählen
+        - Commit-Liste aktualisieren
+        - Auswahl in self.selected_emu_commit speichern
+        - Auswahl wird beim nächsten Patchlauf als exakte OSCam-Emu-Basis verwendet
+        """
+        import os
+        import re
+        import subprocess
+
+        from PyQt6.QtWidgets import (
+            QApplication,
+            QDialog,
+            QDialogButtonBox,
+            QLabel,
+            QLineEdit,
+            QListWidget,
+            QListWidgetItem,
+            QMessageBox,
+            QPushButton,
+            QVBoxLayout,
+        )
+
+        lang = str(getattr(self, "LANG", "de")).lower()[:2]
+        is_de = lang == "de"
+
+        emu_dir = os.path.abspath(
+            globals().get("PATCH_EMU_GIT_DIR", "")
+        )
+
+        # Die aktive OSCam-Emu-URL kommt aus der bestehenden GUI-Konfiguration.
+        try:
+            emu_url, emu_branch = get_emu_repository_config()
+        except Exception:
+            emu_url = globals().get(
+                "EMUREPO_URL",
+                "https://github.com/oscam-mirror/oscam-emu.git"
+            )
+            emu_branch = "master"
+
+        emu_url = str(emu_url or "").strip()
+        emu_branch = str(emu_branch or "master").strip() or "master"
+
+        if not emu_dir:
+            QMessageBox.critical(
+                self,
+                "OSCam-Emu",
+                "PATCH_EMU_GIT_DIR ist nicht definiert."
+                if is_de else
+                "PATCH_EMU_GIT_DIR is not defined."
+            )
+            return False
+
+        try:
+            git = find_git_executable()
+        except Exception:
+            git = None
+
+        if not git:
+            QMessageBox.critical(
+                self,
+                "Git",
+                "Git wurde nicht gefunden."
+                if is_de else
+                "Git was not found."
+            )
+            return False
+
+        def git_run(args, cwd=emu_dir, check=True, timeout=1200):
+            result = subprocess.run(
+                [git] + list(args),
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+            )
+            out = (result.stdout or "").strip()
+            err = (result.stderr or "").strip()
+            if check and result.returncode != 0:
+                raise RuntimeError(err or out or "Git command failed")
+            return out
+
+        try:
+            # Repository bei Bedarf mit der aktuell konfigurierten URL anlegen.
+            if not os.path.isdir(emu_dir) or not os.path.isdir(
+                os.path.join(emu_dir, ".git")
+            ):
+                ensure_git_repository(
+                    emu_dir,
+                    emu_url,
+                    description="OSCam-Emu",
+                    clone_timeout=1200,
+                )
+
+            # Das lokale OSCam-Emu-Repository immer an die aktuell über
+            # "Repo URL" ausgewählte Quelle anbinden.
+            #
+            # WICHTIG: sync_emu_origin() ist ein lokaler Helfer innerhalb
+            # von create_patch() und steht in diesem GUI-Dialog nicht zur
+            # Verfügung. Deshalb wird die Origin-URL hier direkt
+            # synchronisiert. So entsteht kein "name ... is not defined".
+            current_origin = git_run(
+                ["remote", "get-url", "origin"],
+                check=False,
+                timeout=60,
+            ).strip()
+
+            if not current_origin:
+                git_run(
+                    ["remote", "add", "origin", emu_url],
+                    timeout=60,
+                )
+            elif current_origin.rstrip("/") != emu_url.rstrip("/"):
+                git_run(
+                    ["remote", "set-url", "origin", emu_url],
+                    timeout=60,
+                )
+
+            # Keine lokalen Änderungen überschreiben.
+            status = git_run(["status", "--porcelain"], timeout=60)
+            if status:
+                QMessageBox.warning(
+                    self,
+                    "OSCam-Emu",
+                    (
+                        "Das OSCam-Emu-Arbeitsverzeichnis enthält lokale Änderungen.\n\n"
+                        "Bitte zuerst committen/stashen oder den Ordner bereinigen.\n"
+                        "Es werden von diesem Dialog keine Dateien gelöscht."
+                    ) if is_de else (
+                        "The OSCam-Emu working tree contains local changes.\n\n"
+                        "Please commit/stash them or clean the repository first.\n"
+                        "This dialog will not delete any files."
+                    )
+                )
+                return False
+
+            # Den konfigurierten Branch aktualisieren und als Remote-Referenz bereitstellen.
+            git_run(["fetch", "origin", emu_branch], timeout=1200)
+
+            remote_ref = f"origin/{emu_branch}"
+            if not git_run(
+                ["rev-parse", "--verify", remote_ref],
+                check=False,
+                timeout=60,
+            ):
+                raise RuntimeError(
+                    f"OSCam-Emu Branch konnte nicht gefunden werden: {emu_branch}"
+                )
+
+            commits_raw = git_run(
+                [
+                    "log",
+                    remote_ref,
+                    "-100",
+                    "--date=format:%Y-%m-%d %H:%M",
+                    "--format=%H%x09%ad%x09%s",
+                ],
+                timeout=120,
+            )
+
+            commits = []
+            for line in commits_raw.splitlines():
+                parts = line.split("\t", 2)
+                if len(parts) != 3:
+                    continue
+                sha, date_text, subject = parts
+                if not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
+                    continue
+                commits.append((sha.lower(), date_text, subject))
+
+            dialog = QDialog(self)
+            dialog.setWindowTitle(
+                "OSCam-Emu Revision auswählen"
+                if is_de else
+                "Select OSCam-Emu Revision"
+            )
+            dialog.resize(850, 600)
+
+            layout = QVBoxLayout(dialog)
+
+            info = QLabel(
+                (
+                    "Wähle einen OSCam-Emu-Commit aus oder gib einen vollständigen "
+                    "40-stelligen Git-SHA ein."
+                ) if is_de else (
+                    "Select an OSCam-Emu commit or enter a full 40-character Git SHA."
+                )
+            )
+            info.setWordWrap(True)
+            layout.addWidget(info)
+
+            current = getattr(self, "selected_emu_commit", "")
+            if current:
+                current_label = QLabel(
+                    f"Aktuell ausgewählt: {current}"
+                    if is_de else
+                    f"Currently selected: {current}"
+                )
+                layout.addWidget(current_label)
+
+            commit_list = QListWidget(dialog)
+            layout.addWidget(commit_list)
+
+            for sha, date_text, subject in commits:
+                item = QListWidgetItem(
+                    f"{date_text}  {sha[:12]}  {subject}"
+                )
+                item.setData(0x0100, sha)
+                commit_list.addItem(item)
+
+            sha_edit = QLineEdit(dialog)
+            sha_edit.setPlaceholderText(
+                "Vollständigen 40-stelligen Commit-SHA eingeben"
+                if is_de else
+                "Enter full 40-character commit SHA"
+            )
+            layout.addWidget(sha_edit)
+
+            refresh_button = QPushButton(
+                "Commit-Liste aktualisieren"
+                if is_de else
+                "Refresh commit list"
+            )
+            layout.addWidget(refresh_button)
+
+            buttons = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Ok
+                | QDialogButtonBox.StandardButton.Cancel,
+                parent=dialog,
+            )
+            layout.addWidget(buttons)
+
+            def use_list_selection():
+                item = commit_list.currentItem()
+                if item is not None:
+                    sha_edit.setText(str(item.data(0x0100)))
+
+            commit_list.itemDoubleClicked.connect(
+                lambda _item: use_list_selection()
+            )
+            commit_list.currentItemChanged.connect(
+                lambda _current, _previous: use_list_selection()
+            )
+
+            def refresh_list():
+                try:
+                    if git_run(["status", "--porcelain"], timeout=60):
+                        QMessageBox.warning(
+                            dialog,
+                            "OSCam-Emu",
+                            "Arbeitsverzeichnis ist nicht sauber."
+                            if is_de else
+                            "Working tree is not clean."
+                        )
+                        return
+
+                    git_run(["fetch", "origin", emu_branch], timeout=1200)
+
+                    fresh = git_run(
+                        [
+                            "log",
+                            f"origin/{emu_branch}",
+                            "-100",
+                            "--date=format:%Y-%m-%d %H:%M",
+                            "--format=%H%x09%ad%x09%s",
+                        ],
+                        timeout=120,
+                    )
+
+                    commit_list.clear()
+                    local_seen = set()
+
+                    for line in fresh.splitlines():
+                        parts = line.split("\t", 2)
+                        if len(parts) != 3:
+                            continue
+                        sha, date_text, subject = parts
+                        if not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
+                            continue
+                        sha = sha.lower()
+                        if sha in local_seen:
+                            continue
+                        local_seen.add(sha)
+
+                        refreshed_item = QListWidgetItem(
+                            f"{date_text}  {sha[:12]}  {subject}"
+                        )
+                        refreshed_item.setData(0x0100, sha)
+                        commit_list.addItem(refreshed_item)
+
+                except Exception as exc:
+                    QMessageBox.critical(
+                        dialog,
+                        "Git",
+                        f"{exc}"
+                    )
+
+            refresh_button.clicked.connect(refresh_list)
+            buttons.accepted.connect(dialog.accept)
+            buttons.rejected.connect(dialog.reject)
+
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return False
+
+            selected = sha_edit.text().strip().lower()
+
+            if not selected:
+                QMessageBox.warning(
+                    self,
+                    "OSCam-Emu",
+                    "Bitte einen Commit auswählen oder eine SHA eingeben."
+                    if is_de else
+                    "Please select a commit or enter a SHA."
+                )
+                return False
+
+            if not re.fullmatch(r"[0-9a-f]{40}", selected):
+                QMessageBox.warning(
+                    self,
+                    "OSCam-Emu",
+                    "Es muss eine vollständige 40-stellige Git-SHA eingegeben werden."
+                    if is_de else
+                    "A complete 40-character Git SHA is required."
+                )
+                return False
+
+            # Manuell eingegebene SHA bei Bedarf direkt vom aktiven OSCam-Emu-Remote holen.
+            local_selected = git_run(
+                ["rev-parse", "--verify", selected + "^{commit}"],
+                check=False,
+                timeout=60,
+            )
+
+            if local_selected != selected:
+                git_run(
+                    ["fetch", "origin", selected],
+                    timeout=1200,
+                )
+                local_selected = git_run(
+                    ["rev-parse", "--verify", selected + "^{commit}"],
+                    check=False,
+                    timeout=60,
+                )
+
+            if local_selected != selected:
+                raise RuntimeError(
+                    "Der gewünschte OSCam-Emu-Commit konnte nicht aus dem Repository geladen werden."
+                    if is_de else
+                    "The requested OSCam-Emu commit could not be fetched from the repository."
+                )
+
+            # Exakt diesen Commit auschecken.
+            git_run(
+                ["checkout", "--detach", selected],
+                timeout=1200,
+            )
+
+            checked_out = git_run(
+                ["rev-parse", "HEAD"],
+                check=False,
+                timeout=60,
+            )
+
+            if checked_out != selected:
+                raise RuntimeError(
+                    "Der ausgewählte OSCam-Emu-Commit konnte nicht exakt ausgecheckt werden."
+                    if is_de else
+                    "The selected OSCam-Emu commit could not be checked out exactly."
+                )
+
+            # Commit und das dazugehörige Repository gemeinsam merken.
+            # Eine Revision darf später niemals versehentlich mit einer
+            # anderen OSCam-Emu-Repo-URL verwendet werden.
+            self.selected_emu_commit = selected
+            self.selected_emu_commit_repo_url = emu_url
+            self.display_emu_commit = selected
+            globals()["SELECTED_EMU_COMMIT"] = selected
+            globals()["SELECTED_EMU_COMMIT_REPO_URL"] = emu_url
+            self.update_revision_button_labels()
+
+            status_text = (
+                f"OSCam-Emu Basis: {selected[:12]}"
+                if is_de else
+                f"OSCam-Emu base: {selected[:12]}"
+            )
+
+            try:
+                if hasattr(self, "info_text"):
+                    self.info_text.append(f"<b>✅ {status_text}</b>")
+                    self.info_text.ensureCursorVisible()
+                QApplication.processEvents()
+            except Exception:
+                pass
+
+            QMessageBox.information(
+                self,
+                "OSCam-Emu",
+                (
+                    f"Commit erfolgreich ausgewählt:\n\n{selected}\n\n"
+                    "Dieser Commit wird bei der nächsten Patch-Erstellung als OSCam-Emu-Basis verwendet."
+                ) if is_de else (
+                    f"Commit selected successfully:\n\n{selected}\n\n"
+                    "This commit will be used as the OSCam-Emu base for the next patch."
+                )
+            )
+            return True
+
+        except Exception as exc:
+            print("[OSCAM-EMU CHECKOUT] Fehler:", repr(exc), flush=True)
+            try:
+                QMessageBox.critical(
+                    self,
+                    "OSCam-Emu Git",
                     f"Fehler:\n{exc}"
                 )
             except Exception:
@@ -23725,6 +26016,13 @@ class PatchManagerGUI(QWidget):
                     self.info_text,
                     self.progress_bar.setValue
                 )
+
+            def callback_emu_revision():
+                print(
+                    "[GRID CALLBACK] oscam_emu_revision START",
+                    flush=True
+                )
+                return self.checkout_emu_revision()
 
             def callback_exit():
 
@@ -25528,159 +27826,262 @@ class PatchManagerGUI(QWidget):
         # ---------------------------------------------------------
         # Erfolgreicher Check
         # ---------------------------------------------------------
+        
+      
         def commit_received(newest_hash):
 
             try:
                 if pbar:
                     set_progress(75)
 
-                # ---------------------------------------------
-                # Letzten bekannten Commit holen
-                # ---------------------------------------------
-                last_known = str(
+                # -------------------------------------------------
+                # NEUER COMMIT VON STREAMBOARD
+                # -------------------------------------------------
+                new_hash = str(
+                    newest_hash
+                ).strip().lower()
+
+                # -------------------------------------------------
+                # BISHERIGER AKTUELLER COMMIT AUS CONFIG
+                # -------------------------------------------------
+                old_hash = str(
                     self.cfg.get(
                         "last_stream_commit",
                         ""
                     )
                 ).strip().lower()
 
-                # ---------------------------------------------
-                # AKTUELL
-                # ---------------------------------------------
-                if newest_hash == last_known:
+                # -------------------------------------------------
+                # ANZEIGE
+                # -------------------------------------------------
+                new_display = (
+                    new_hash[:8]
+                    if new_hash
+                    else "---"
+                )
 
-                    safe_play(
-                        "dialog-information.oga"
-                    )
+                old_display = (
+                    old_hash[:8]
+                    if old_hash
+                    else "---"
+                )
 
-                    msg_up = self.TEXT.get(
-                        "check_commit_up_to_date",
-                        "Kein neuer Commit vorhanden."
-                    )
+                # -------------------------------------------------
+                # TEXTE
+                # -------------------------------------------------
+                msg_new = self.TEXT.get(
+                    "check_commit_new_found",
+                    "Neuer Commit gefunden!"
+                )
 
-                    lbl_curr = self.TEXT.get(
-                        "check_commit_current_hash",
-                        "Aktueller Hash:"
-                    )
+                msg_up = self.TEXT.get(
+                    "check_commit_up_to_date",
+                    "Kein neuer Commit vorhanden."
+                )
 
-                    self.log_message(
-                        "<span style='color:cyan;'>"
-                        f"ℹ️ {msg_up} "
-                        f"({newest_hash[:7]})"
-                        "</span>"
-                    )
+                lbl_new = self.TEXT.get(
+                    "check_commit_new_hash",
+                    "Neu:"
+                )
 
-                    QMessageBox.information(
-                        self,
-                        self.TEXT.get(
-                            "check_commit_title",
-                            "OSCam Commit-Check"
-                        ),
-                        (
-                            f"{msg_up}\n\n"
-                            f"{lbl_curr} "
-                            f"{newest_hash[:8]}"
-                        )
-                    )
+                lbl_old = self.TEXT.get(
+                    "check_commit_old_hash",
+                    "Alt:"
+                )
 
-                    if pbar:
-                        pbar.setStyleSheet(
-                            """
-                            QProgressBar {
-                                text-align: center;
-                                font-weight: bold;
-                                border: 2px solid #222;
-                                border-radius: 6px;
-                                background-color: #111;
-                                color: black;
-                                font-size: 15pt;
-                            }
+                # -------------------------------------------------
+                # PRÜFEN
+                # -------------------------------------------------
+                is_new_commit = (
+                    new_hash != old_hash
+                )
 
-                            QProgressBar::chunk {
-                                background-color: orange;
-                                border-radius: 4px;
-                            }
-                            """
-                        )
+                print(
+                    "[COMMIT] Streamboard:",
+                    new_hash,
+                    flush=True
+                )
 
-                        finalize_pbar(
-                            f"✅ {msg_up}",
-                            3
-                        )
+                print(
+                    "[COMMIT] bisher last_stream_commit:",
+                    old_hash,
+                    flush=True
+                )
 
-                # ---------------------------------------------
+                print(
+                    "[COMMIT] neuer Commit:",
+                    is_new_commit,
+                    flush=True
+                )
+
+                # =================================================
                 # NEUER COMMIT
-                # ---------------------------------------------
-                else:
+                # =================================================
+                if is_new_commit:
 
                     safe_play(
                         "complete.oga"
                     )
 
-                    msg_new = self.TEXT.get(
-                        "check_commit_new_found",
-                        "Neuer Commit gefunden!"
-                    )
-
-                    lbl_new = self.TEXT.get(
-                        "check_commit_new_hash",
-                        "Neu:"
-                    )
-
-                    lbl_old = self.TEXT.get(
-                        "check_commit_old_hash",
-                        "Alt:"
-                    )
-
                     self.log_message(
                         "<span style='color:cyan;'>"
                         f"🆕 {msg_new} "
-                        f"({newest_hash[:7]})"
+                        f"({new_display})"
                         "</span>"
-                    )
-
-                    old_hash = (
-                        last_known[:8]
-                        if last_known
-                        else "---"
                     )
 
                     info_text = (
                         f"{msg_new}\n\n"
-                        f"{lbl_new} {newest_hash[:8]}\n"
-                        f"{lbl_old} {old_hash}"
+                        f"{lbl_new} {new_display}\n"
+                        f"{lbl_old} {old_display}"
                     )
 
-                    QMessageBox.information(
-                        self,
-                        self.TEXT.get(
-                            "check_commit_title",
-                            "OSCam Commit-Check"
-                        ),
-                        info_text
+                # =================================================
+                # KEIN NEUER COMMIT
+                # =================================================
+                else:
+
+                    safe_play(
+                        "dialog-information.oga"
                     )
 
-                    # -----------------------------------------
-                    # Commit speichern
-                    # -----------------------------------------
+                    self.log_message(
+                        "<span style='color:cyan;'>"
+                        f"ℹ️ {msg_up} "
+                        f"({new_display})"
+                        "</span>"
+                    )
+
+                    info_text = (
+                        f"{msg_up}\n\n"
+                        f"{lbl_new} {new_display}\n"
+                        f"{lbl_old} {old_display}"
+                    )
+
+                # -------------------------------------------------
+                # DIALOG
+                # -------------------------------------------------
+                QMessageBox.information(
+                    self,
+                    self.TEXT.get(
+                        "check_commit_title",
+                        "OSCam Commit-Check"
+                    ),
+                    info_text
+                )
+
+                
+                # =================================================
+                # COMMIT-HISTORIE AKTUALISIEREN
+                # NUR wenn tatsächlich ein neuer Commit vorhanden ist
+                # =================================================
+
+                if is_new_commit:
+
+                    # Bisheriger aktueller Commit wird zum vorherigen
+                    self.cfg[
+                        "previous_stream_commit"
+                    ] = old_hash
+
+                    # Neuer Streamboard-Commit wird aktuell
                     self.cfg[
                         "last_stream_commit"
-                    ] = newest_hash
+                    ] = new_hash
 
+                    print(
+                        "[COMMIT] Neuer Commit erkannt",
+                        flush=True
+                    )
+
+                    print(
+                        "[COMMIT] previous_stream_commit:",
+                        self.cfg[
+                            "previous_stream_commit"
+                        ],
+                        flush=True
+                    )
+
+                    print(
+                        "[COMMIT] last_stream_commit:",
+                        self.cfg[
+                            "last_stream_commit"
+                        ],
+                        flush=True
+                    )
+
+                    # -------------------------------------------------
+                    # CONFIG NUR BEI NEUEM COMMIT SPEICHERN
+                    # -------------------------------------------------
                     save_config_func = globals().get(
                         "save_config"
                     )
 
-                    if save_config_func:
-                        save_config_func(
-                            self.cfg,
-                            gui_instance=self,
-                            silent=True
+                    if not save_config_func:
+                        raise RuntimeError(
+                            "save_config wurde nicht gefunden."
                         )
 
-                    if pbar:
+                    result = save_config_func(
+                        self.cfg,
+                        gui_instance=self,
+                        silent=True
+                    )
+
+                    print(
+                        "[COMMIT] save_config:",
+                        result,
+                        flush=True
+                    )
+
+                else:
+
+                    print(
+                        "[COMMIT] Kein neuer Commit - "
+                        "Historie bleibt unverändert.",
+                        flush=True
+                    )
+
+
+                # -------------------------------------------------
+                # CONFIG SPEICHERN
+                # -------------------------------------------------
+                save_config_func = globals().get(
+                    "save_config"
+                )
+
+                if not save_config_func:
+                    raise RuntimeError(
+                        "save_config wurde nicht gefunden."
+                    )
+
+                result = save_config_func(
+                    self.cfg,
+                    gui_instance=self,
+                    silent=True
+                )
+
+                print(
+                    "[COMMIT] save_config:",
+                    result,
+                    flush=True
+                )
+
+                # -------------------------------------------------
+                # PROGRESS
+                # -------------------------------------------------
+                if pbar:
+
+                    if is_new_commit:
+
                         finalize_pbar(
                             f"🆕 {msg_new}",
+                            3
+                        )
+
+                    else:
+
+                        finalize_pbar(
+                            f"✅ {msg_up}",
                             3
                         )
 
@@ -25711,6 +28112,11 @@ class PatchManagerGUI(QWidget):
                     finalize_pbar(
                         "❌ Fehler"
                     )
+
+
+
+
+
 
         # ---------------------------------------------------------
         # Fehler vom Worker
@@ -26056,33 +28462,16 @@ class PatchManagerGUI(QWidget):
                 pass
 
         # ============================================================
-        # 7. HAUPTFENSTER + CENTRAL WIDGET HINTERGRUND
+        # 7. HAUPTFENSTER-HINTERGRUND
         # ============================================================
+        # PatchManagerGUI erbt von QWidget, nicht von QMainWindow.
+        # Daher gibt es hier bewusst KEIN centralWidget().
         try:
-            # QMainWindow selbst
             self.setAutoFillBackground(True)
-
             palette = self.palette()
-            palette.setColor(
-                self.backgroundRole(),
-                QColor(bg_color)
-            )
+            palette.setColor(self.backgroundRole(), QColor(bg_color))
             self.setPalette(palette)
-
-            # Central Widget ebenfalls einfärben
-            central = self.centralWidget()
-
-            if central:
-                central.setAutoFillBackground(True)
-
-                central_palette = central.palette()
-                central_palette.setColor(
-                    central.backgroundRole(),
-                    QColor(bg_color)
-                )
-                central.setPalette(central_palette)
-
-        except RuntimeError:
+        except (RuntimeError, AttributeError):
             pass
 
         # ============================================================
@@ -26384,6 +28773,14 @@ class PatchManagerGUI(QWidget):
             safe_ui("btn_repo_url", "setText", get_t("repo_url_button", "🌐 Repo URL"))
             repo_tip = "Emu-Repo URL ändern" if lang == "de" else "Change Emu-Repo URL"
             safe_ui("btn_repo_url", "setToolTip", repo_tip)
+
+        # --- PATCH-ORDNER / PATCH-KOPIERBUTTONS ---
+        safe_ui("header_btn_s3_ncam", "setText", get_t("patch_folder_s3_ncam", "S3-NCam-Bonecrew-Pfad"))
+        safe_ui("header_btn_s4", "setText", get_t("patch_folder_s4", "S4-Pfad"))
+        safe_ui("header_btn_patch_ncam", "setText", get_t("patch_copy_s3_ncam", "Patch → S3-NCam"))
+        safe_ui("header_btn_patch_s4", "setText", get_t("patch_copy_s4", "Patch → S4"))
+        safe_ui("header_btn_s3_ncam", "setToolTip", get_t("patch_folder_s3_ncam_tooltip", "S3-NCam-Bonecrew-Pfad wählen"))
+        safe_ui("header_btn_s4", "setToolTip", get_t("patch_folder_s4_tooltip", "S4-Pfad wählen"))
 
         # --- E) LABELS & SYSTEM ---
         safe_ui("lang_label", "setText", get_t("language_label", "Sprache:"))
@@ -27018,7 +29415,24 @@ class PatchManagerGUI(QWidget):
             OLD_PATCH_FILE = os.path.join(OLD_, "oscam-emu.patch")
             ALT_PATCH_FILE = os.path.join(OLD_, "oscam-emu.altpatch")
 
-            save_config(self.commit_spin.value())  # 🔹 GENAU WIE FARBE
+            self.OLD_PATCH_DIR = OLD_
+            self.OLD_PATCH_FILE = OLD_PATCH_FILE
+            self.ALT_PATCH_FILE = ALT_PATCH_FILE
+            saved = save_config(
+                {
+                    "s3_patch_path": OLD_,
+                    "old_patch_dir": OLD_,
+                },
+                gui_instance=self,
+                silent=True,
+            )
+            if not saved:
+                self.append_info(
+                    info_widget,
+                    "❌ Fehler beim Speichern des Patch-Pfads.",
+                    "error",
+                )
+                return False
 
             self.append_info(
                 info_widget,
@@ -27032,6 +29446,118 @@ class PatchManagerGUI(QWidget):
 
         if progress_callback:
             progress_callback(100)
+
+    def select_ncam_patch_path_manually(self):
+        """Wählt ausschließlich den Patch-Ordner für S3-NCam-Bonecrew."""
+        current = getattr(self, "NCAM_PATCH_PATH", "") or getattr(self, "OLD_PATCH_DIR", os.getcwd())
+        directory = QFileDialog.getExistingDirectory(self, "S3-NCam-Bonecrew Patch-Ordner auswählen", current)
+        if not directory:
+            return
+        directory = os.path.normpath(directory)
+        self.NCAM_PATCH_PATH = directory
+        if not isinstance(getattr(self, "cfg", None), dict):
+            self.cfg = {}
+        self.cfg["ncam_patch_path"] = directory
+        save_config({"ncam_patch_path": directory}, gui_instance=self, silent=True)
+
+    def select_s4_patch_path_manually(self):
+        """Wählt ausschließlich den Patch-Ordner für S4."""
+        current = getattr(self, "S4_PATCH_PATH", "") or getattr(self, "OLD_PATCH_DIR", os.getcwd())
+        directory = QFileDialog.getExistingDirectory(self, "S4 Patch-Ordner auswählen", current)
+        if not directory:
+            return
+        directory = os.path.normpath(directory)
+        self.S4_PATCH_PATH = directory
+        if not isinstance(getattr(self, "cfg", None), dict):
+            self.cfg = {}
+        self.cfg["s4_patch_path"] = directory
+        save_config({"s4_patch_path": directory}, gui_instance=self, silent=True)
+
+    def copy_patch_to_target(self, target):
+        """Kopiert die aktuell erzeugte oscam-emu.patch in den gewählten S3-NCam- oder S4-Ordner."""
+        import os
+        import shutil
+        from PyQt6.QtWidgets import QMessageBox
+
+        is_de = str(getattr(self, "LANG", "de")).lower()[:2] == "de"
+        source = os.path.normpath(getattr(self, "PATCH_FILE", globals().get("PATCH_FILE", "")))
+
+        if target == "ncam":
+            destination_dir = os.path.normpath(getattr(self, "NCAM_PATCH_PATH", globals().get("NCAM_PATCH_PATH", "")))
+            label = "S3-NCam-Bonecrew"
+        elif target == "s4":
+            destination_dir = os.path.normpath(getattr(self, "S4_PATCH_PATH", globals().get("S4_PATCH_PATH", "")))
+            label = "S4"
+        else:
+            return
+
+        if not source or not os.path.isfile(source):
+            QMessageBox.warning(
+                self,
+                "Patch fehlt" if is_de else "Patch missing",
+                f"Die Quelldatei oscam-emu.patch wurde nicht gefunden:\n{source}"
+                if is_de else
+                f"The source file oscam-emu.patch was not found:\n{source}",
+            )
+            return
+
+        if not destination_dir:
+            QMessageBox.warning(
+                self,
+                "Pfad fehlt" if is_de else "Path missing",
+                f"Für {label} ist noch kein Zielordner eingestellt."
+                if is_de else
+                f"No destination folder is configured for {label}.",
+            )
+            return
+
+        try:
+            os.makedirs(destination_dir, exist_ok=True)
+            destination = os.path.join(destination_dir, "oscam-emu.patch")
+
+            # Vorhandene Patch-Datei nicht kommentarlos verlieren: Backup anlegen.
+            if os.path.isfile(destination):
+                backup = destination + ".bak"
+                try:
+                    shutil.copy2(destination, backup)
+                except Exception:
+                    pass
+
+            shutil.copy2(source, destination)
+
+            self.append_info(
+                getattr(self, "info_text", None),
+                f"✅ oscam-emu.patch nach {label} kopiert: {destination}",
+                "success",
+            )
+
+            if "safe_play" in globals():
+                try:
+                    safe_play("complete.oga")
+                except Exception:
+                    pass
+
+            QMessageBox.information(
+                self,
+                "Patch kopiert" if is_de else "Patch copied",
+                f"oscam-emu.patch wurde nach {label} kopiert.\n\n{destination}"
+                if is_de else
+                f"oscam-emu.patch was copied to {label}.\n\n{destination}",
+            )
+
+        except Exception as exc:
+            self.append_info(
+                getattr(self, "info_text", None),
+                f"❌ Patch-Kopie fehlgeschlagen: {exc}",
+                "error",
+            )
+            QMessageBox.critical(
+                self,
+                "Fehler" if is_de else "Error",
+                f"oscam-emu.patch konnte nicht nach {label} kopiert werden:\n{exc}"
+                if is_de else
+                f"oscam-emu.patch could not be copied to {label}:\n{exc}",
+            )
 
     def closeEvent(self, event):
         """
