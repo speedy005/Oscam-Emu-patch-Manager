@@ -856,7 +856,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "7.4.1"
+APP_VERSION = "7.4.3"
 # ===================== PATCH DIRS =====================
 def get_best_patch_dir():
     """Bestimmt den besten Patch-Ordner (S3, lokal, Home)."""
@@ -7123,7 +7123,7 @@ class CinematicMatrixSplash(QWidget):
             r" █  |_|   |_||__| |__||_|  |__||__| |__||_______||_______||___|  |_|      █ ",
             r" █                                                                        █ ",
             r" █──────────────────[ SYSTEM: NEURAL_LINK OPERATIONAL ]───────────────────█ ",
-            r" █                   >> OSCAM EMU PATCH MANAGER v7.4.1  <<               █ ",
+            r" █                   >> OSCAM EMU PATCH MANAGER v7.4.3  <<               █ ",
             r" █             >> CODENAME: Speedy_Oscam-_Patch_Manager 2026 <<           █ ",
             r" ◥◣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◢◤ "
         ]
@@ -13463,6 +13463,1130 @@ def patch_oscam_emu_git(
         )
 
         return False
+class SystemCheckWorker(QObject):
+    """
+    Führt alle blockierenden System-/Netzwerkprüfungen außerhalb
+    des GUI-Threads aus.
+
+    GUI-Objekte niemals direkt aus diesem Worker verändern!
+    """
+
+    progress = pyqtSignal(int, str)
+    html = pyqtSignal(str)
+    finished = pyqtSignal()
+    error = pyqtSignal(str)
+
+    def __init__(self, lang="de", repo_url=""):
+        super().__init__()
+
+        self.lang = lang.lower()
+        self.is_de = self.lang == "de"
+
+        self.repo_url = (repo_url or "").strip()
+
+        # Realistische, aber kurze Timeouts
+        self.SOCKET_TIMEOUT = 2.5
+        self.HTTP_TIMEOUT = (3.5, 6.0)
+        self.TOOL_TIMEOUT = 1.5
+
+    def tr(self, de, en):
+        return de if self.is_de else en
+
+    def row(
+        self,
+        icon,
+        label,
+        status,
+        label_col="#00FF00",
+        status_col="#00ADFF",
+        size="22pt",
+    ):
+        emoji_fonts = (
+            "'Segoe UI Emoji', 'Noto Color Emoji', "
+            "'Segoe UI Symbol', sans-serif"
+        )
+
+        label = str(label).replace(" ", "&nbsp;")
+        status = str(status)
+
+        return (
+            '<div style="'
+            'white-space:nowrap;'
+            'margin:2px 0;'
+            'padding:0;'
+            'line-height:1.2;'
+            'text-align:center;'
+            'background:transparent;">'
+
+            f'<span style="'
+            f'font-family:{emoji_fonts};'
+            f'font-size:22pt;'
+            f'vertical-align:middle;'
+            f'background:transparent;">'
+            f'{icon} '
+            f'</span>'
+
+            f'<span style="'
+            f"font-family:'Arial Black','Segoe UI',sans-serif;"
+            f'font-size:{size};'
+            f'color:{label_col};'
+            f'vertical-align:middle;">'
+            f'<b>{label} :&nbsp;</b>'
+            f'</span>'
+
+            f'<span style="'
+            f"font-family:'Arial Black','Segoe UI',sans-serif;"
+            f'font-size:{size};'
+            f'color:{status_col};'
+            f'vertical-align:middle;">'
+            f'<b>{status}</b>'
+            f'</span>'
+
+            '</div>'
+        )
+
+    def run(self):
+        import os
+        import re
+        import shutil
+        import socket
+        import subprocess
+        import platform
+        import importlib.util
+        import time
+        from datetime import timedelta
+
+        try:
+            import requests
+            import psutil
+        except Exception as e:
+            self.error.emit(f"Import error: {e}")
+            self.finished.emit()
+            return
+
+        try:
+            # ============================================================
+            # TEXTE
+            # ============================================================
+
+            T = {
+                "lang_label": self.tr("Sprache", "Language"),
+                "lang_name": self.tr("Deutsch", "English"),
+                "kernel": self.tr("System Kernel", "System Kernel"),
+                "free": self.tr("frei", "free"),
+                "not_available": self.tr(
+                    "nicht verfügbar",
+                    "not available",
+                ),
+                "cpu_temp": self.tr(
+                    "CPU-Temperatur",
+                    "CPU Temperature",
+                ),
+                "network": self.tr("Netzwerk", "Network"),
+                "ping": "Ping Test",
+                "online": "Online",
+                "offline": "Offline",
+                "ok": "OK",
+                "missing": self.tr("FEHLT", "MISSING"),
+                "tool": self.tr("Prüfe Tool", "Checking tool"),
+                "repo": self.tr(
+                    "Prüfe Repository",
+                    "Checking repository",
+                ),
+                "network_check": self.tr(
+                    "Teste Netzwerk Verbindung",
+                    "Testing network connection",
+                ),
+                "stats": self.tr(
+                    "Lade GitHub Statistiken",
+                    "Loading GitHub statistics",
+                ),
+                "finish": self.tr(
+                    "Finalisiere System Check",
+                    "Finalizing system check",
+                ),
+                "done": self.tr(
+                    "System Check abgeschlossen ✔",
+                    "System check completed ✔",
+                ),
+            }
+
+            C_GREEN = "#00FF00"
+            C_BLUE = "#00ADFF"
+            C_RED = "#FF0000"
+            C_ORANGE = "#F57A08"
+            C_YELLOW = "#FFFF00"
+
+            S_NORM = "22pt"
+            S_EMOJI = "22pt"
+            S_REPO = "20pt"
+
+            # ============================================================
+            # HEADER
+            # ============================================================
+
+            copyright_text = self.tr(
+                "© 2026 speedy005 - Alle Rechte vorbehalten.",
+                "© 2026 speedy005 - All rights reserved.",
+            )
+
+            greeting = self.tr(
+                "Grüße, speedy005",
+                "Regards, speedy005",
+            )
+
+            app_ver = globals().get("APP_VERSION", "3.1.5")
+
+            header = f"""
+            <style>
+                body {{
+                    background: transparent;
+                }}
+
+                span {{
+                    background: transparent;
+                }}
+            </style>
+
+            <div style="
+                text-align:center;
+                width:100%;
+                font-family:sans-serif;
+            ">
+
+                <div style="
+                    line-height:1.2;
+                    margin-bottom:16px;
+                ">
+                    <span style="
+                        font-family:'Arial Black',sans-serif;
+                        font-size:18pt;
+                        font-weight:bold;
+                        color:#39FF14;
+                        text-shadow:
+                            0 0 6px #39FF14,
+                            0 0 12px #00FFFF;
+                    ">
+                        {copyright_text.split("-", 1)[0].strip()}
+                    </span>
+
+                    <span style="
+                        color:#FFFFFF;
+                        font-size:18pt;
+                    ">
+                        -
+                    </span>
+
+                    <span style="
+                        font-family:'Arial Black',sans-serif;
+                        font-size:18pt;
+                        font-weight:bold;
+                        color:#FF0039;
+                        text-shadow:
+                            0 0 6px #FF00FF,
+                            0 0 12px #FF1493;
+                    ">
+                        {copyright_text.split("-", 1)[1].strip()}
+                    </span>
+                </div>
+
+                <div style="margin-bottom:8px;">
+                    <span style="
+                        color:{C_GREEN};
+                        font-size:32pt;
+                    ">●</span>
+
+                    <span style="
+                        color:{C_RED};
+                        font-family:'Arial Black',sans-serif;
+                        font-size:28pt;
+                        font-weight:900;
+                    ">
+                        LIVE
+                    </span>
+
+                    <span style="
+                        color:#FFFFFF;
+                        font-size:22pt;
+                    ">
+                        |
+                    </span>
+
+                    <span style="
+                        color:{C_BLUE};
+                        font-family:'Arial Black',sans-serif;
+                        font-size:28pt;
+                        font-weight:900;
+                    ">
+                        System Monitor
+                    </span>
+                </div>
+
+                <div style="margin-bottom:12px;">
+                    <span style="
+                        font-family:'Noto Color Emoji',
+                        'Segoe UI Emoji',
+                        'Apple Color Emoji',
+                        sans-serif;
+                        font-size:32pt;
+                    ">🚀</span>
+
+                    <span style="
+                        color:{C_ORANGE};
+                        font-family:'Arial Black',sans-serif;
+                        font-size:32pt;
+                        font-weight:900;
+                    ">
+                        OSCam Emu Patch Generator
+                    </span>
+                </div>
+
+                <div style="
+                    font-family:Arial,sans-serif;
+                    font-size:16pt;
+                    font-weight:bold;
+                    margin-top:6px;
+                ">
+                    <span style="color:#FF0033;">
+                        {greeting.split(",", 1)[0]}
+                    </span>
+
+                    <span style="color:#00ADFF;">
+                        ,{greeting.split(",", 1)[1]}
+                    </span>
+                </div>
+
+            </div>
+
+            <div style="
+                text-align:center;
+                font-family:'Arial Black',sans-serif;
+                font-size:22pt;
+                font-weight:bold;
+                margin-top:8px;
+            ">
+                <span style="color:{C_RED};">
+                    {self.tr("Autor", "Author")}:
+                </span>
+
+                <span style="color:{C_YELLOW};">
+                    speedy005
+                </span>
+
+                <span style="color:#FFFFFF;">
+                    |
+                </span>
+
+                <span style="color:{C_ORANGE};">
+                    Version:
+                </span>
+
+                <span style="color:{C_BLUE};">
+                    {app_ver}
+                </span>
+            </div>
+            """
+
+            self.html.emit(header)
+
+            self.progress.emit(
+                8,
+                self.tr(
+                    "📋 Lade Programm Header",
+                    "📋 Loading program header",
+                ),
+            )
+
+            # ============================================================
+            # SYSTEM
+            # ============================================================
+
+            self.progress.emit(
+                15,
+                self.tr(
+                    "⚙️ Initialisiere System Check",
+                    "⚙️ Initializing system check",
+                ),
+            )
+
+            os_type = platform.system()
+
+            if os_type == "Linux":
+                try:
+                    os_name = platform.freedesktop_os_release().get(
+                        "PRETTY_NAME",
+                        "Linux",
+                    )
+                except Exception:
+                    os_name = f"Linux {platform.release()}"
+            elif os_type == "Windows":
+                os_name = f"Windows {platform.release()}"
+            else:
+                os_name = f"{os_type} {platform.release()}"
+
+            os_icon = "💻" if os_type == "Windows" else "🐧"
+
+            system_html = ""
+
+            system_html += self.row(
+                "🇩🇪" if self.is_de else "🇬🇧",
+                T["lang_label"],
+                T["lang_name"],
+                C_GREEN,
+                C_BLUE,
+            )
+
+            system_html += self.row(
+                "⚙️",
+                T["kernel"],
+                f"{platform.system()} {platform.release()}",
+                C_GREEN,
+                C_BLUE,
+            )
+
+            system_html += self.row(
+                os_icon,
+                "System",
+                os_name,
+                C_GREEN,
+                C_BLUE,
+            )
+
+            cpu_arch = platform.machine()
+            cpu_count = psutil.cpu_count(logical=True) or 0
+
+            system_html += self.row(
+                "📟",
+                "CPU",
+                f"{cpu_arch} ({cpu_count} Kerne)",
+                C_GREEN,
+                C_BLUE,
+            )
+
+            ram = psutil.virtual_memory()
+
+            ram_total = round(ram.total / (1024 ** 3))
+            ram_free = round(ram.available / (1024 ** 3))
+
+            system_html += self.row(
+                "💾",
+                "RAM",
+                f"{ram_total}GB / {ram_free}GB "
+                f"{T['free']}",
+                C_GREEN,
+                C_BLUE,
+            )
+
+            # ============================================================
+            # DISKS
+            # ============================================================
+
+            for part in psutil.disk_partitions(all=False):
+                try:
+                    usage = psutil.disk_usage(part.mountpoint)
+
+                    total_gb = round(
+                        usage.total / (1024 ** 3)
+                    )
+
+                    free_gb = round(
+                        usage.free / (1024 ** 3)
+                    )
+
+                    device_name = (
+                        part.device
+                        if os_type != "Windows"
+                        else part.mountpoint
+                    )
+
+                    system_html += self.row(
+                        "💽",
+                        device_name,
+                        f"{total_gb}GB / "
+                        f"{free_gb}GB "
+                        f"{T['free']}",
+                        C_GREEN,
+                        C_BLUE,
+                    )
+
+                except (PermissionError, OSError):
+                    system_html += self.row(
+                        "💽",
+                        part.mountpoint,
+                        T["not_available"],
+                        C_RED,
+                        C_BLUE,
+                    )
+
+            # ============================================================
+            # TEMPERATURE
+            # ============================================================
+
+            try:
+                temps = psutil.sensors_temperatures()
+
+                found_temp = False
+
+                for name, entries in temps.items():
+                    if entries:
+                        found_temp = True
+
+                        temp = entries[0].current
+
+                        system_html += self.row(
+                            "🌡️",
+                            f"{T['cpu_temp']} ({name})",
+                            f"{temp:.1f}°C",
+                            C_GREEN,
+                            C_BLUE,
+                        )
+
+                if not found_temp:
+                    system_html += self.row(
+                        "🌡️",
+                        T["cpu_temp"],
+                        T["not_available"],
+                        C_RED,
+                        C_BLUE,
+                    )
+
+            except Exception:
+                system_html += self.row(
+                    "🌡️",
+                    T["cpu_temp"],
+                    T["not_available"],
+                    C_RED,
+                    C_BLUE,
+                )
+
+            # ============================================================
+            # UPTIME
+            # ============================================================
+
+            try:
+                uptime_sec = int(
+                    time.time() - psutil.boot_time()
+                )
+
+                uptime_str = str(
+                    timedelta(seconds=uptime_sec)
+                )
+
+            except Exception:
+                uptime_str = "N/A"
+
+            system_html += self.row(
+                "⏱️",
+                "Uptime",
+                uptime_str,
+                C_GREEN,
+                C_BLUE,
+            )
+
+            self.html.emit(system_html)
+
+            self.progress.emit(
+                30,
+                f"💻 {self.tr('Systeminformationen gelesen', 'System information read')}",
+            )
+
+            # ============================================================
+            # TOOLS
+            # ============================================================
+
+            tool_list = [
+                "pacman",
+                "yay",
+                "git",
+                "patch",
+                "zip",
+                "nmap",
+                "hydra",
+                "john",
+                "python3",
+                "pip",
+                "ssh",
+                "sqlmap",
+                "wireshark",
+                "nikto",
+                "tcpdump",
+                "aircrack-ng",
+                "hashcat",
+            ]
+
+            tool_html = ""
+
+            total_tools = len(tool_list)
+
+            for i, tool_name in enumerate(tool_list):
+
+                path = shutil.which(tool_name)
+
+                if path:
+                    status_icon = "✅"
+                    info = (
+                        "aktiv"
+                        if self.is_de
+                        else "on"
+                    )
+
+                    try:
+                        if tool_name == "john":
+                            command = [
+                                tool_name,
+                                "--list=build-info",
+                            ]
+                        else:
+                            command = [
+                                tool_name,
+                                "--version",
+                            ]
+
+                        info_raw = subprocess.check_output(
+                            command,
+                            stderr=subprocess.STDOUT,
+                            timeout=self.TOOL_TIMEOUT,
+                            text=True,
+                            errors="replace",
+                        ).strip()
+
+                        match = re.search(
+                            r"\d+(?:\.\d+)+|\d+",
+                            info_raw,
+                        )
+
+                        if match:
+                            info = f"v{match.group(0)}"
+
+                    except (
+                        subprocess.TimeoutExpired,
+                        subprocess.SubprocessError,
+                        OSError,
+                    ):
+                        # Tool ist vorhanden, aber Version konnte
+                        # nicht rechtzeitig ermittelt werden.
+                        info = (
+                            "aktiv"
+                            if self.is_de
+                            else "on"
+                        )
+
+                    tool_html += self.row(
+                        status_icon,
+                        tool_name.capitalize(),
+                        info,
+                        C_GREEN,
+                        C_BLUE,
+                    )
+
+                else:
+                    tool_html += self.row(
+                        "❌",
+                        tool_name.capitalize(),
+                        (
+                            "nicht verfügbar"
+                            if self.is_de
+                            else "off"
+                        ),
+                        C_RED,
+                        C_RED,
+                    )
+
+                progress = 30 + int(
+                    ((i + 1) / total_tools) * 20
+                )
+
+                self.progress.emit(
+                    progress,
+                    f"🔍 {T['tool']}: {tool_name}",
+                )
+
+            self.html.emit(tool_html)
+
+            # ============================================================
+            # PYTHON PACKAGES
+            # ============================================================
+
+            package_html = ""
+
+            for pkg in ("PyQt6", "requests"):
+                try:
+                    available = (
+                        importlib.util.find_spec(pkg)
+                        is not None
+                    )
+                except Exception:
+                    available = False
+
+                package_html += self.row(
+                    "📦",
+                    pkg,
+                    T["ok"] if available else T["missing"],
+                    C_GREEN if available else C_RED,
+                    C_BLUE if available else C_RED,
+                )
+
+            self.html.emit(package_html)
+
+            # ============================================================
+            # NETWORK
+            # ============================================================
+
+            self.progress.emit(
+                65,
+                f"🌐 {T['network_check']}",
+            )
+
+            network_html = ""
+
+            local_ip = None
+            ping_ms = None
+
+            try:
+                start = time.perf_counter()
+
+                with socket.create_connection(
+                    ("8.8.8.8", 53),
+                    timeout=self.SOCKET_TIMEOUT,
+                ) as conn:
+
+                    local_ip = conn.getsockname()[0]
+
+                ping_ms = int(
+                    (time.perf_counter() - start) * 1000
+                )
+
+                network_html += self.row(
+                    "📡",
+                    T["network"],
+                    f"{T['online']} ({local_ip})",
+                    C_GREEN,
+                    C_BLUE,
+                )
+
+                network_html += self.row(
+                    "⚡",
+                    T["ping"],
+                    f"{ping_ms} ms",
+                    C_GREEN,
+                    C_BLUE,
+                )
+
+            except Exception:
+                network_html += self.row(
+                    "❌",
+                    T["network"],
+                    T["offline"],
+                    C_RED,
+                    C_RED,
+                )
+
+            self.html.emit(network_html)
+
+            # ============================================================
+            # REPOSITORIES
+            # ============================================================
+
+            repo_list = [
+                (
+                    "📡",
+                    "Streamboard Oscam",
+                    "git.streamboard.tv",
+                ),
+                (
+                    "🐙",
+                    "OSCam Emu Mirror",
+                    "github.com",
+                ),
+                (
+                    "⭐",
+                    "speedy Oscam Emu",
+                    "github.com",
+                ),
+                (
+                    "🔗",
+                    "GitHub API Server",
+                    "api.github.com",
+                ),
+            ]
+
+            repo_html = ""
+
+            total_repos = len(repo_list)
+
+            for i, (icon, r_name, host) in enumerate(
+                repo_list
+            ):
+
+                online = False
+
+                try:
+                    # TCP-Test statt gethostbyname().
+                    # Dadurch haben wir einen echten Timeout.
+                    with socket.create_connection(
+                        (host, 443),
+                        timeout=self.SOCKET_TIMEOUT,
+                    ):
+                        online = True
+
+                except (
+                    OSError,
+                    socket.timeout,
+                ):
+                    online = False
+
+                repo_html += self.row(
+                    icon,
+                    r_name,
+                    T["online"]
+                    if online
+                    else T["offline"],
+                    (
+                        C_GREEN
+                        if online
+                        else C_RED
+                    ),
+                    (
+                        C_BLUE
+                        if online
+                        else C_RED
+                    ),
+                    S_REPO,
+                )
+
+                progress = 70 + int(
+                    ((i + 1) / total_repos) * 15
+                )
+
+                self.progress.emit(
+                    progress,
+                    f"📡 {T['repo']}: {r_name}",
+                )
+
+            # ============================================================
+            # EINGESTELLTE REPO-URL ANZEIGEN
+            # ============================================================
+
+            if self.repo_url:
+
+                safe_repo_url = (
+                    self.repo_url
+                    .replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                    .replace('"', "&quot;")
+                )
+
+                repo_html += f"""
+                <div style="
+                    text-align:center;
+                    margin-top:12px;
+                    margin-bottom:8px;
+                    font-family:'Arial Black',sans-serif;
+                ">
+
+                    <span style="
+                        color:{C_ORANGE};
+                        font-size:20pt;
+                        font-weight:bold;
+                    ">
+                        🔗 Repository:
+                    </span>
+
+                    <br>
+
+                    <span style="
+                        color:{C_BLUE};
+                        font-size:18pt;
+                        font-weight:bold;
+                    ">
+                        {safe_repo_url}
+                    </span>
+
+                </div>
+                """
+
+            self.html.emit(repo_html)
+
+            # ============================================================
+            # GITHUB STATISTIK
+            # ============================================================
+
+            self.progress.emit(
+                88,
+                f"📊 {T['stats']}",
+            )
+
+            git_count = 0
+
+            # Wenn eine GitHub-Repo-URL konfiguriert ist,
+            # versuchen wir daraus owner/repository zu ermitteln.
+            github_repo = "speedy005/Oscam-Emu-patch-Manager"
+
+            if self.repo_url:
+                match = re.search(
+                    r"github\.com/([^/\s]+)/([^/\s#?]+)",
+                    self.repo_url,
+                    re.IGNORECASE,
+                )
+
+                if match:
+                    owner = match.group(1)
+                    repository = match.group(2)
+
+                    repository = repository.rstrip(
+                        "/"
+                    ).removesuffix(".git")
+
+                    github_repo = (
+                        f"{owner}/{repository}"
+                    )
+
+            try:
+                import urllib3
+
+                urllib3.disable_warnings(
+                    urllib3.exceptions.InsecureRequestWarning
+                )
+
+                response = requests.get(
+                    (
+                        "https://api.github.com/"
+                        f"repos/{github_repo}/releases"
+                    ),
+                    headers={
+                        "User-Agent":
+                            "OSCam-Emu-Patch-Manager"
+                    },
+                    timeout=self.HTTP_TIMEOUT,
+                )
+
+                if response.status_code == 200:
+
+                    releases = response.json()
+
+                    for release in releases:
+                        for asset in release.get(
+                            "assets",
+                            [],
+                        ):
+                            try:
+                                git_count += int(
+                                    asset.get(
+                                        "download_count",
+                                        0,
+                                    )
+                                )
+                            except (
+                                TypeError,
+                                ValueError,
+                            ):
+                                pass
+
+            except (
+                requests.RequestException,
+                ValueError,
+                OSError,
+            ):
+                # Statistik darf niemals den gesamten
+                # Systemcheck scheitern lassen.
+                git_count = 0
+
+            # ============================================================
+            # LOCAL COUNTER
+            # ============================================================
+
+            try:
+                tool_dir = os.path.dirname(
+                    os.path.abspath(__file__)
+                )
+            except NameError:
+                tool_dir = os.getcwd()
+
+            counter_file = os.path.join(
+                tool_dir,
+                "install_counter.txt",
+            )
+
+            try:
+
+                if (
+                    not os.path.exists(counter_file)
+                    or os.path.getsize(counter_file) == 0
+                ):
+                    with open(
+                        counter_file,
+                        "w",
+                        encoding="utf-8",
+                    ) as f:
+                        f.write("0")
+
+                with open(
+                    counter_file,
+                    "r",
+                    encoding="utf-8",
+                ) as f:
+                    try:
+                        install_count = int(
+                            f.read().strip()
+                        )
+                    except ValueError:
+                        install_count = 0
+
+                install_count += 1
+
+                with open(
+                    counter_file,
+                    "w",
+                    encoding="utf-8",
+                ) as f:
+                    f.write(str(install_count))
+
+            except OSError:
+                install_count = 0
+
+            total_stats = install_count
+
+            # ============================================================
+            # STATISTIK HTML
+            # ============================================================
+
+            stats_html = f"""
+            <div style="
+                text-align:center;
+                font-family:'Arial Black',sans-serif;
+                margin-top:20px;
+            ">
+
+                <div style="
+                    font-size:32pt;
+                    font-weight:bold;
+                    margin-bottom:10px;
+                ">
+                    📊
+                    <span style="color:{C_YELLOW};">
+                        STATISTICS
+                    </span>
+                </div>
+
+                <div style="
+                    font-size:28pt;
+                    font-weight:bold;
+                    margin:12px 0;
+                ">
+                    🐙
+                    <span style="color:{C_GREEN};">
+                        GitHub:
+                    </span>
+
+                    <span style="color:{C_BLUE};">
+                        {git_count}
+                    </span>
+                </div>
+
+                <div style="
+                    font-size:28pt;
+                    font-weight:bold;
+                    margin:12px 0;
+                ">
+                    💾
+                    <span style="color:{C_ORANGE};">
+                        Local:
+                    </span>
+
+                    <span style="color:{C_BLUE};">
+                        {install_count}
+                    </span>
+                </div>
+
+                <div style="
+                    font-size:30pt;
+                    font-weight:bold;
+                    margin-top:15px;
+                ">
+                    📊
+                    <span style="color:{C_YELLOW};">
+                        Total:
+                    </span>
+
+                    <span style="color:{C_BLUE};">
+                        {total_stats}
+                    </span>
+                </div>
+
+            </div>
+            """
+
+            self.html.emit(stats_html)
+
+            # ============================================================
+            # FOOTER
+            # ============================================================
+
+            self.progress.emit(
+                96,
+                f"⚙️ {T['finish']}",
+            )
+
+            footer = f"""
+            <div style="
+                text-align:center;
+                line-height:1.2;
+                margin-top:14px;
+                margin-bottom:10px;
+            ">
+
+                <span style="
+                    font-family:'Segoe UI Emoji',
+                    'Noto Color Emoji',
+                    sans-serif;
+                    font-size:{S_EMOJI};
+                ">
+                    ✅
+                </span>
+
+                <span style="
+                    font-family:'Arial Black',sans-serif;
+                    font-size:{S_NORM};
+                    font-weight:bold;
+                    color:{C_GREEN};
+                ">
+                    {self.tr(
+                        "System-Check OK.",
+                        "System Check OK."
+                    )}
+                </span>
+
+                <span style="
+                    font-family:'Arial Black',sans-serif;
+                    font-size:{S_NORM};
+                    font-weight:bold;
+                    color:{C_BLUE};
+                ">
+                    &nbsp;
+                    {self.tr(
+                        "Bereit.",
+                        "Ready."
+                    )}
+                </span>
+
+            </div>
+            """
+
+            self.html.emit(footer)
+
+            self.progress.emit(
+                100,
+                f"✅ {T['done']}",
+            )
+
+        except Exception as e:
+            self.error.emit(
+                f"{type(e).__name__}: {e}"
+            )
+
+        finally:
+            self.finished.emit()
 
 # PatchManagerGUI
 class PatchManagerGUI(QWidget):
@@ -14231,6 +15355,353 @@ class PatchManagerGUI(QWidget):
             after_animation()
 
         QApplication.processEvents()
+    
+    def run_full_system_check(self, clear_log=True):
+        """
+        Startet den Systemcheck ohne die GUI zu blockieren.
+
+        Alle langsamen/blockierenden Operationen laufen im Worker-Thread.
+        Die GUI wird ausschließlich über Qt-Signale aktualisiert.
+        """
+
+        from PyQt6.QtCore import QThread
+
+        # ------------------------------------------------------------
+        # Doppelstart verhindern
+        # ------------------------------------------------------------
+
+        if getattr(self, "_checking_active", False):
+            return
+
+        self._checking_active = True
+        self.is_loading = True
+
+        # ------------------------------------------------------------
+        # UI vorbereiten
+        # ------------------------------------------------------------
+
+        if hasattr(self, "hide_final_label"):
+            try:
+                self.hide_final_label()
+            except Exception:
+                pass
+        elif hasattr(self, "final_label"):
+            try:
+                if self.final_label:
+                    self.final_label.hide()
+            except Exception:
+                pass
+
+        if clear_log and hasattr(self, "log_window"):
+            try:
+                self.log_window.clear()
+            except Exception:
+                pass
+
+        widget = getattr(self, "info_text", None)
+        pbar = getattr(self, "progress_bar", None)
+
+        if widget is None:
+            self.is_loading = False
+            self._checking_active = False
+            return
+
+        # ------------------------------------------------------------
+        # Progressbar
+        # ------------------------------------------------------------
+
+        if pbar:
+
+            pbar.setRange(0, 100)
+            pbar.setValue(0)
+            pbar.setTextVisible(True)
+
+            pbar.setStyleSheet(
+                """
+                QProgressBar {
+                    border: 2px solid #444444;
+                    border-radius: 8px;
+                    background-color: #0A0A0A;
+                    color: black;
+                    text-align: center;
+                    font-weight: 900;
+                    font-size: 20px;
+                    min-height: 35px;
+                }
+
+                QProgressBar::chunk {
+                    background-color: qlineargradient(
+                        spread:pad,
+                        x1:0,
+                        y1:0,
+                        x2:1,
+                        y2:0,
+                        stop:0 #FF00FF,
+                        stop:0.5 #00FFFF,
+                        stop:1 #39FF14
+                    );
+                    border-radius: 6px;
+                }
+                """
+            )
+
+            pbar.setFormat(
+                "🚀 Initialisiere System...   %p%"
+            )
+            pbar.show()
+
+        # ------------------------------------------------------------
+        # Info-Widget leeren
+        # ------------------------------------------------------------
+
+        if clear_log:
+            widget.setHtml("")
+
+        # ------------------------------------------------------------
+        # HTML-Puffer
+        # ------------------------------------------------------------
+
+        self._system_check_html = []
+
+        def append_html(fragment):
+            """
+            Dieser Slot läuft im GUI-Thread.
+            """
+
+            if not fragment:
+                return
+
+            self._system_check_html.append(fragment)
+
+            widget.setHtml(
+                "".join(self._system_check_html)
+            )
+
+            try:
+                from PyQt6.QtGui import QTextCursor
+
+                widget.moveCursor(
+                    QTextCursor.MoveOperation.End
+                )
+            except Exception:
+                pass
+
+        def update_progress(value, text):
+            """
+            Dieser Slot läuft im GUI-Thread.
+            """
+
+            if not pbar:
+                return
+
+            value = max(
+                0,
+                min(100, int(value))
+            )
+
+            pbar.setValue(value)
+            pbar.setFormat(
+                f"{text}   %p%"
+            )
+
+        # ------------------------------------------------------------
+        # Worker / Thread erstellen
+        # ------------------------------------------------------------
+
+        self._system_check_thread = QThread(self)
+
+        # ------------------------------------------------------------
+        # Eingestellte Repo-URL aus deiner Anwendung holen
+        #
+        # Passe die Attributnamen hier nur an, falls deine URL anders
+        # gespeichert wird.
+        # ------------------------------------------------------------
+
+        repo_url = ""
+
+        possible_repo_attributes = (
+            "repo_url",
+            "repository_url",
+            "github_repo_url",
+            "REPO_URL",
+            "GITHUB_REPO_URL",
+            "repo",
+        )
+
+        for attr_name in possible_repo_attributes:
+
+            try:
+                value = getattr(
+                    self,
+                    attr_name,
+                    "",
+                )
+
+                if isinstance(value, str) and value.strip():
+                    repo_url = value.strip()
+                    break
+
+            except Exception:
+                pass
+
+        # ------------------------------------------------------------
+        # Worker
+        # ------------------------------------------------------------
+
+        self._system_check_worker = SystemCheckWorker(
+            lang=getattr(
+                self,
+                "LANG",
+                "de",
+            ),
+            repo_url=repo_url,
+        )
+
+        self._system_check_worker.moveToThread(
+            self._system_check_thread
+        )
+
+        # ------------------------------------------------------------
+        # Signale
+        # ------------------------------------------------------------
+
+        self._system_check_worker.html.connect(
+            append_html
+        )
+
+        self._system_check_worker.progress.connect(
+            update_progress
+        )
+
+        self._system_check_worker.error.connect(
+            lambda message: append_html(
+                "<br>"
+                "<div style='"
+                "text-align:center;"
+                "color:#FF0000;"
+                "font-family:Arial Black;"
+                "font-size:18pt;"
+                "'>"
+                f"❌ System Check Error:<br>{message}"
+                "</div>"
+            )
+        )
+
+        self._system_check_worker.finished.connect(
+            self._system_check_finished
+        )
+
+        # ------------------------------------------------------------
+        # Worker nach Beendigung aufräumen
+        # ------------------------------------------------------------
+
+        self._system_check_worker.finished.connect(
+            self._system_check_thread.quit
+        )
+
+        self._system_check_worker.finished.connect(
+            self._system_check_worker.deleteLater
+        )
+
+        self._system_check_thread.finished.connect(
+            self._system_check_thread.deleteLater
+        )
+
+        # ------------------------------------------------------------
+        # Thread starten
+        # ------------------------------------------------------------
+
+        self._system_check_thread.started.connect(
+            self._system_check_worker.run
+        )
+
+        self._system_check_thread.start()    
+        
+    def _system_check_finished(self):
+        """
+        Wird nach erfolgreichem oder fehlerhaftem Worker-Ende
+        im GUI-Thread ausgeführt.
+        """
+
+        pbar = getattr(
+            self,
+            "progress_bar",
+            None,
+        )
+
+        if pbar:
+            pbar.setValue(100)
+
+            is_de = (
+                getattr(
+                    self,
+                    "LANG",
+                    "de",
+                ).lower()
+                == "de"
+            )
+
+            pbar.setFormat(
+                (
+                    "✅ System Check abgeschlossen ✔   %p%"
+                    if is_de
+                    else
+                    "✅ System check completed ✔   %p%"
+                )
+            )
+
+        # ------------------------------------------------------------
+        # Status zurücksetzen
+        # ------------------------------------------------------------
+
+        self.is_loading = False
+        self._checking_active = False
+
+        # ------------------------------------------------------------
+        # Vorhandene Update-Prüfung beibehalten
+        #
+        # Wichtig:
+        # Sie läuft jetzt NACH dem Systemcheck.
+        # ------------------------------------------------------------
+
+        try:
+            self.check_for_update_on_start()
+        except Exception as e:
+            widget = getattr(
+                self,
+                "info_text",
+                None,
+            )
+
+            if widget:
+                widget.append(
+                    "<br>"
+                    "<span style='"
+                    "color:#F57A08;"
+                    "font-weight:bold;"
+                    "'>"
+                    f"⚠️ Update check: {e}"
+                    "</span>"
+                )
+
+        # ------------------------------------------------------------
+        # Referenzen behalten wir bis zum Thread-Ende.
+        # Danach können sie freigegeben werden.
+        # ------------------------------------------------------------
+
+        try:
+            thread = getattr(
+                self,
+                "_system_check_thread",
+                None,
+            )
+
+            if thread and not thread.isRunning():
+                self._system_check_thread = None
+                self._system_check_worker = None
+
+        except Exception:
+            pass
     
     def show_commits(self, info_widget=None, progress_callback=None, num_commits=None):
         """
@@ -23189,775 +24660,6 @@ class PatchManagerGUI(QWidget):
                 1000, lambda: setattr(self, "_update_dialog_active", False)
             )
 
-    # ---------------------
-    # TOOLS CHECK
-    # ---------------------
-
-    def run_full_system_check(self, clear_log=True):
-        import shutil, platform, socket, importlib.util, time, os, subprocess, re, requests
-        import psutil
-        import urllib3
-        from datetime import datetime, timedelta
-        from PyQt6.QtGui import QTextCursor
-        from PyQt6.QtWidgets import QApplication
-
-        # --- 1. UI Reset & Vorbereitung ---
-        if hasattr(self, "hide_final_label"):
-            self.hide_final_label()
-        if clear_log and hasattr(self, "log_window"):
-            self.log_window.clear()
-
-        pbar = getattr(self, "progress_bar", None)
-        html = []
-
-        # --- 2. Styles & Fonts (Emoji-Hintergründe fixen) ---
-        F_EMOJI = (
-            "'Segoe UI Emoji', 'Noto Color Emoji', 'Apple Color Emoji', sans-serif"
-        )
-        F_MONO = "'Arial Black', 'Segoe UI', sans-serif"
-        S_NORM, S_EMOJI = "22pt", "22pt"
-        C_GREEN, C_BLUE, C_RED, C_ORANGE = "#00FF00", "#00ADFF", "#FF0000", "#F57A08"
-
-        # CSS für saubere Emojis ohne Boxen
-        html.append(
-            f"<style>body {{ background: transparent; }} span {{ background: transparent; font-family: {F_EMOJI}; }}</style>"
-        )
-
-        # --- Final Label zu Beginn verstecken ---
-        if hasattr(self, "hide_final_label"):
-            self.hide_final_label()
-        elif hasattr(self, "final_label") and self.final_label:
-            self.final_label.hide()
-        # Definierung der Schriftarten für maximale Emoji-Kompatibilität ohne Boxen
-        html.append(
-            """
-        <style>
-            body, table, td, span {
-                font-family: 'Segoe UI Emoji', 'Noto Color Emoji', 'Apple Color Emoji', 'Segoe UI Symbol', sans-serif;
-                font-size: 14px;
-                line-height: 1.4;
-            }
-            .emoji {
-                display: inline-block;
-                min-width: 25px; /* Sorgt dafür, dass Icons perfekt untereinander stehen */
-                text-align: center;
-            }
-        </style>
-        """
-        )
-
-        # --- Funktion für flüssige ProgressBar ---
-        def smooth_set_value(pbar, target, text=None, step=1, delay=0.004):
-            """
-            Bewegt ProgressBar flüssig und zeigt Status Text + Prozent an
-            """
-
-            if not pbar:
-                return
-
-            if text:
-                pbar.setFormat(f"{text}   %p%")
-
-            current = pbar.value()
-
-            if target < current:
-                current = target
-
-            while current < target:
-                current += step
-                if current > target:
-                    current = target
-
-                pbar.setValue(current)
-                QApplication.processEvents()
-                time.sleep(delay)
-
-            pbar.setValue(target)
-
-        try:
-            # --- Styles & Farben ---
-            S_TITEL, S_HEADER, S_NORM, S_EMOJI, S_FEAT, S_FOOTER = (
-                "32pt",
-                "22pt",
-                "22pt",
-                "22pt",
-                "22pt",
-                "22pt",
-            )
-            C_GREEN, C_BLUE, C_YELLOW, C_RED, C_LINE, C_ORANGE = (
-                "#00FF00",
-                "#00ADFF",
-                "#FFFF00",
-                "#FF0000",
-                "#444444",
-                "#F57A08",
-            )
-            C_START_TEXT, C_START_TIME = C_ORANGE, C_RED
-            S_AV_SIZE, F_AV_STYLE, F_AV_WEIGHT = (
-                "22pt",
-                "'Arial Black', sans-serif",
-                "bold",
-            )
-            C_AV_LABEL_AUTOR, C_AV_VALUE_AUTOR = C_RED, C_YELLOW
-            C_AV_LABEL_VER, C_AV_VALUE_VER = C_ORANGE, C_BLUE
-            S_REPO, C_REPO_NAME, C_REPO_VAL = "20pt", C_GREEN, C_BLUE
-            F_MONO = "'Arial Black', 'Segoe UI', sans-serif"
-            F_EMOJI = (
-                "'Noto Color Emoji','Segoe UI Emoji','Apple Color Emoji',sans-serif"
-            )
-
-            app_ver = globals().get("APP_VERSION", "3.1.5")
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            lang = getattr(self, "LANG", "de").lower()
-            is_de = lang == "de"
-
-            T = {
-                # --- Grundlegende Labels ---
-                "live": "LIVE",
-                "monitor": "System Monitor",
-                "features_head": "Hauptmerkmale" if is_de else "Main Features",
-                "greeting": "Grüße, speedy005" if is_de else "Regards, speedy005",
-                "autor": "Autor" if is_de else "Author",
-                "version": "Version",
-                "tool_name": "OSCam Emu Patch Generator",
-                "copyright": (
-                    "© 2026 speedy005 - Alle Rechte vorbehalten."
-                    if is_de
-                    else "© 2026 speedy005 - All rights reserved."
-                ),
-                "features_head": "Hauptmerkmale:" if is_de else "Key Features:",
-                # --- HDD/Temp ---
-                "free": "frei",
-                "not_available": "nicht verfügbar",
-                "cpu_temp": "CPU-Temperatur",
-                "cpu_temp_en": "CPU Temp",
-                # --- Tool / Patch Labels ---
-                "tool_name": "OSCam Emu Patch Generator",
-                "feat_1": "Erstellt .patch" if is_de else "Generates .patch",
-                "feat_2": "Patch-Dateien",
-                "feat_3": "Lokalisierung",
-                "feat_4": "-Log",
-                "features_head": "Hauptmerkmale",
-                # --- Systeminfos ---
-                "lang_label": "Sprache",
-                "lang_name": "Deutsch" if is_de else "English",
-                "kernel": "System Kernel",
-                "ram": "RAM",
-                "os_version": "OS Version",
-                "host_ip": "Hostname / IP",
-                "uptime": "Uptime",
-                # --- Stats Labels ---
-                "stats_title": "STATISTICS",
-                "stats_github": "GitHub:",
-                "stats_local": "Local:",
-                "stats_total": "Total:",
-                # Progressbar
-                "prog_init": (
-                    "Initialisiere System..." if is_de else "Initializing system..."
-                ),
-                "prog_finish": (
-                    "Finalisiere System Check" if is_de else "Finalizing system check"
-                ),
-                "prog_header": (
-                    "Lade Programm Header" if is_de else "Loading program header"
-                ),
-                "prog_version": (
-                    "Lade Versionsinformationen" if is_de else "Loading version info"
-                ),
-                "prog_check": (
-                    "Initialisiere System Check"
-                    if is_de
-                    else "Initializing system check"
-                ),
-                "prog_sysinfo": (
-                    "Lese System Informationen"
-                    if is_de
-                    else "Reading system information"
-                ),
-                "prog_tool": "Prüfe Tool" if is_de else "Checking tool",
-                "prog_network": (
-                    "Teste Netzwerk Verbindung"
-                    if is_de
-                    else "Testing network connection"
-                ),
-                "prog_repo": "Prüfe Repository" if is_de else "Checking repository",
-                "prog_stats": (
-                    "Lade GitHub Statistiken" if is_de else "Loading GitHub statistics"
-                ),
-                "prog_finish": (
-                    "Finalisiere System Check" if is_de else "Finalizing system check"
-                ),
-                "prog_done": (
-                    "System Check abgeschlossen ✔"
-                    if is_de
-                    else "System check completed ✔"
-                ),
-                # --- Footer Labels ---
-                "foot_ok": "Alles OK",
-                "foot_ready": "Bereit",
-                # --- OSCam Labels ---
-                "oscam_uptodate": (
-                    "OSCam ist aktuell." if is_de else "OSCam is up-to-date."
-                ),
-                "oscam_update_found": (
-                    "UPDATE VERFÜGBAR" if is_de else "UPDATE AVAILABLE"
-                ),
-                "feat_1": "Erstellt .patch" if is_de else "Generates .patch",
-                "feat_2": "GitHub Patches" if is_de else "GitHub patches",
-                "feat_3": "DE/EN Lokalisierung" if is_de else "DE/EN Localization",
-                "feat_4": "Echtzeit-Log" if is_de else "Real-time log",
-                # --- Patch Generator Texte ---
-                "patch_1": (
-                    "Automatisches Patching: Erstellt .patch Dateien direkt vom Streamboard."
-                    if is_de
-                    else "Automated Patching: Generates .patch files directly from Streamboard."
-                ),
-                "patch_2": (
-                    "Commit Monitor: Echtzeit-Tracking von neuen Änderungen."
-                    if is_de
-                    else "Commit Monitor: Real-time tracking of new changes."
-                ),
-                "patch_3": (
-                    "Lokalisierung: Vollständige Unterstützung für DE/EN."
-                    if is_de
-                    else "Localization: Full support for DE/EN."
-                ),
-                "patch_4": (
-                    "Smart Logging: Farblich kodiertes Feedback-System."
-                    if is_de
-                    else "Smart Logging: Color-coded feedback system."
-                ),
-                "patch_footer": (
-                    f"{'Autor' if is_de else 'Author'}: speedy005 | Version: {globals().get('APP_VERSION', '2.7.6')} | "
-                    f"{'Lizenz' if is_de else 'License'}: MIT"
-                ),
-                # --- Start Text ---
-                "start": "Starte System Check…" if is_de else "Starting System Check…",
-                # --- Sprache / System ---
-                "lang_name": "Deutsch" if is_de else "English",
-                "lang_label": "Sprache" if is_de else "Language",
-                "kernel": "System Kern" if is_de else "System Kernel",
-                # --- Status / Netzwerk ---
-                "ok": "OK",
-                "missing": "FEHLT" if is_de else "MISSING",
-                "online": "Online",
-                "offline": "Offline",
-                "network": "Netzwerk" if is_de else "Network",
-                "ping": "Ping Test",
-                # --- Footer ---
-                "foot_ok": "System-Check OK." if is_de else "System Check OK.",
-                "foot_ready": "Bereit." if is_de else "Ready.",
-            }
-
-            widget = getattr(self, "info_text", None)
-            if not widget:
-                return
-            if clear_log:
-                widget.setHtml("")
-
-            html = []
-
-            def make_safe_row(icon, label, status, label_col, status_col, size=S_NORM):
-                # WICHTIG: Die Font-Liste muss interne Anführungszeichen haben!
-                emoji_fonts = "'Segoe UI Emoji', 'Noto Color Emoji', 'Segoe UI Symbol', sans-serif"
-
-                return (
-                    f'<div style="white-space: nowrap; margin: 2px 0; padding: 0; line-height: 1.2; text-align: center; background: transparent;">'
-                    # Hier erzwingen wir die Emoji-Schriftart direkt im Span
-                    f'<span style="font-family: {emoji_fonts}; font-size: {S_EMOJI}; vertical-align: middle; background: transparent;">{icon} </span>'
-                    # Label
-                    f'<span style="font-family: {F_MONO}; font-size: {size}; color: {label_col}; vertical-align: middle;"><b>{label.replace(" ", "&nbsp;")} :&nbsp;</b></span>'
-                    # Status
-                    f'<span style="font-family: {F_MONO}; font-size: {size}; color: {status_col}; vertical-align: middle;"><b>{status}</b></span>'
-                    f"</div>"
-                )
-
-            def refresh_ui():
-                widget.setHtml("".join(html))
-                widget.moveCursor(QTextCursor.MoveOperation.End)
-                QApplication.processEvents()
-
-            # --- ProgressBar vorbereiten ---
-            pbar = getattr(self, "progress_bar", None)
-            if pbar:
-                pbar.setStyleSheet(
-                    f"""
-                    QProgressBar {{
-                        border: 2px solid #444444;
-                        border-radius: 8px;
-                        background-color: #0A0A0A;
-                        color: black;
-                        text-align: center;
-                        font-weight: 900;
-                        font-size: 20px;
-                        min-height: 35px;
-                    }}
-                    QProgressBar::chunk {{
-                        background-color: qlineargradient(
-                            spread:pad, x1:0, y1:0, x2:1, y2:0,
-                            stop:0 #FF00FF, stop:0.5 #00FFFF, stop:1 #39FF14
-                        );
-                        border-radius: 6px;
-                    }}
-                    """
-                )
-            if pbar:
-                pbar.setRange(0, 100)
-                pbar.setValue(0)
-                pbar.setTextVisible(True)
-                pbar.setFormat(f"{T['prog_init']} %p%")
-                smooth_set_value(pbar, 5, f"🚀 {T['prog_init']}")
-                pbar.show()
-
-            html.append(
-                f'<div style="text-align:center; width:100%; font-family:sans-serif;">'
-                # © 2026 speedy005 (Grün) - All rights reserved (Rot)
-                f'<div style="line-height:1.2; margin-bottom:16px;">'
-                f"<span style=\"font-family:'Arial Black', sans-serif; font-size:18pt; font-weight:bold;\">"
-                f'<span style="color:#39FF14; text-shadow:0 0 6px #39FF14, 0 0 12px #00FFFF;">'
-                f'{T["copyright"].split("-")[0].strip()}</span>'
-                f'<span style="color:#ffffff;"> - </span>'
-                f'<span style="color:#ff0039; text-shadow:0 0 6px #FF00FF, 0 0 12px #FF1493;">'
-                f'{T["copyright"].split("-")[1].strip() if "-" in T["copyright"] else ""}</span>'
-                f"</span>"
-                f"</div>"
-                # ● LIVE | System Monitor
-                f'<div style="margin-bottom:8px;">'
-                f'<span style="color:{C_GREEN}; font-size:32pt;">●</span>'
-                f'<span style="color:{C_RED}; font-family:\'Arial Black\', sans-serif; font-size:28pt; font-weight:900;"> {T["live"]}</span> | '
-                f'<span style="color:{C_BLUE}; font-family:\'Arial Black\', sans-serif; font-size:28pt; font-weight:900;">{T["monitor"]}</span>'
-                f"</div>"
-                # 🚀 Tool Name
-                f'<div style="margin-bottom:12px;">'
-                f'<span style="font-family:{F_EMOJI}; font-size:32pt;">🚀</span> '
-                f'<span style="color:{C_ORANGE}; font-family:\'Arial Black\',sans-serif; font-size:32pt; font-weight:900;">{T["tool_name"]}</span>'
-                f"</div>"
-                # Signatur
-                f"<div style=\"font-family:'Arial', sans-serif; font-size:16pt; font-weight:bold; margin-top:6px;\">"
-                f'<span style="color:#FF0033;">{T["greeting"].split(",")[0]}</span>'
-                f'<span style="color:#00ADFF;">,{T["greeting"].split(",")[1]}</span>'
-                f"</div>"
-                f"</div>"
-            )
-
-            refresh_ui()
-            if pbar:
-                smooth_set_value(pbar, 10, f"📋 {T['prog_header']}")
-
-            # --- Autor / Version ---
-            html.append(
-                f"<div style=\"font-size:{S_AV_SIZE}; font-family:'Arial Black'; font-weight:bold; margin:1px 0; text-align:center;\">"
-                f'<span style="color:{C_AV_LABEL_AUTOR};">{T["autor"]}:</span> '
-                f'<span style="color:{C_AV_VALUE_AUTOR};">speedy005</span> | '
-                f'<span style="color:{C_AV_LABEL_VER};">{T["version"]}:</span> '
-                f'<span style="color:{C_AV_VALUE_VER};">{app_ver}</span>'
-                f"</div>"
-            )
-            refresh_ui()
-            if pbar:
-                smooth_set_value(pbar, 15, f"📦 {T['prog_version']}")
-
-            html.append(
-                f'<div style="text-align:center; line-height:1.5; margin-bottom:12px;">'
-                # Features Überschrift
-                f'<div style="color:#FF0000; font-size:{S_HEADER}; font-weight:bold; text-align:center; margin-bottom:6px;">'
-                f'{T["features_head"] if is_de else T.get("features_head_en", "Features")}'
-                f"</div>"
-                # Features Liste
-                f"<div style='font-size:{S_FEAT};'>"
-                # Feature 1
-                f"<span style='font-family:Arial Black, sans-serif; font-weight:bold; color:#FF0000;'>➤</span> "
-                f"<span style='font-family:Arial Black, sans-serif; font-weight:bold; color:{C_GREEN};'>{T['feat_1']}</span> "
-                f"<span style='font-family:Arial Black, sans-serif; font-weight:bold; color:{C_BLUE};'>.patch</span><br>"
-                # Feature 2
-                f"<span style='font-family:Arial Black, sans-serif; font-weight:bold; color:#FF0000;'>➤</span> "
-                f"<span style='font-family:Arial Black, sans-serif; font-weight:bold; color:{C_GREEN};'>{T['feat_2']}</span> "
-                f"<span style='font-family:Arial Black, sans-serif; font-weight:bold; color:{C_BLUE};'>Patches</span><br>"
-                # Feature 3 DE/EN Lokalisierung (farblich getrennt)
-            )
-            feat3_parts = T["feat_3"].split(
-                " "
-            )  # ["DE/EN", "Lokalisierung"] oder ["DE/EN", "Localization"]
-            html.append(
-                f"<span style='font-family:Arial Black, sans-serif; font-weight:bold; color:#FF0000;'>➤</span> "
-                f"<span style='font-family:Arial Black, sans-serif; font-weight:bold; color:{C_GREEN};'>{feat3_parts[0]}</span> "
-                f"<span style='font-family:Arial Black, sans-serif; font-weight:bold; color:{C_BLUE};'>{feat3_parts[1]}</span><br>"
-            )
-            html.append(
-                # Feature 4
-                f"<span style='font-family:Arial Black, sans-serif; font-weight:bold; color:#FF0000;'>➤</span> "
-                f"<span style='font-family:Arial Black, sans-serif; font-weight:bold; color:{C_GREEN};'>{T['feat_4']}</span> "
-                f"<span style='font-family:Arial Black, sans-serif; font-weight:bold; color:{C_BLUE};'>-Log</span>"
-                f"</div>"
-                # Trennlinie
-                f'<div style="border-top:1px solid {C_LINE}; margin:3px 0;"></div>'
-                # Start Text mit Emoji
-                f"<div style='margin:4px 0; text-align:center;'>"
-                f"<span style='font-family:{F_EMOJI}; font-size:{S_EMOJI};'>⏳ </span> "
-                f"<span style='color:{C_START_TEXT}; font-family:Arial Black, sans-serif; font-size:{S_NORM}; font-weight:bold;'>{T['start']}</span>"
-                f"</div>"
-                f"</div>"
-            )
-            refresh_ui()
-            if pbar:
-                smooth_set_value(pbar, 20, f"⚙️ {T['prog_check']}")
-
-            # --- System-Identifikation (Windows & Arch/Linux) ---
-            os_type = platform.system()
-            if os_type == "Linux":
-                try:
-                    # Erkennt spezifisch "Arch Linux", "Ubuntu" etc.
-                    os_name = platform.freedesktop_os_release().get(
-                        "PRETTY_NAME", "Linux"
-                    )
-                except:
-                    os_name = f"Linux {platform.release()}"
-            else:
-                os_name = f"Windows {platform.release()}"
-
-            # Icons ohne Hintergrund/Rahmen
-            os_icon = "💻" if os_type == "Windows" else "🐧"
-
-            # --- Systeminfos ---
-            l_icon = "🇩🇪" if is_de else "🇬🇧"
-            html.append(
-                make_safe_row(l_icon, T["lang_label"], T["lang_name"], C_GREEN, C_BLUE)
-            )
-
-            # Wichtig: Emojis wie das Zahnrad brauchen oft den Font-Zwang, um nicht unsichtbar zu sein
-            html.append(
-                make_safe_row(
-                    "⚙️",
-                    T["kernel"],
-                    f"{platform.system()} {platform.release()}",
-                    C_GREEN,
-                    C_BLUE,
-                )
-            )
-            html.append(make_safe_row(os_icon, "System", os_name, C_GREEN, C_BLUE))
-
-            # --- Hardware ---
-            cpu_arch = platform.machine()
-            cpu_count = psutil.cpu_count(logical=True)
-            html.append(
-                make_safe_row(
-                    "📟", "CPU", f"{cpu_arch} ({cpu_count} Kerne)", C_GREEN, C_BLUE
-                )
-            )
-
-            # RAM / Speicher
-            ram_total = round(psutil.virtual_memory().total / (1024**3))  # GB
-            ram_free = round(psutil.virtual_memory().available / (1024**3))  # GB
-            html.append(
-                make_safe_row(
-                    "💾",
-                    "RAM",
-                    f"{ram_total}GB / {ram_free}GB frei",
-                    C_GREEN,
-                    C_BLUE,
-                )
-            )
-
-            # --- Festplatten / SSD ---
-            for part in psutil.disk_partitions(all=False):
-                device_name = (
-                    part.device if platform.system() == "Linux" else part.mountpoint
-                )
-                try:
-                    usage = psutil.disk_usage(part.mountpoint)
-                    total_gb = round(usage.total / (1024**3))
-                    free_gb = round(usage.free / (1024**3))
-                    html.append(
-                        make_safe_row(
-                            "💽",
-                            device_name,
-                            f"{total_gb}GB / {free_gb}GB {T['free']}",
-                            C_GREEN,
-                            C_BLUE,
-                        )
-                    )
-                except (PermissionError, OSError):
-                    html.append(
-                        make_safe_row(
-                            "💽", device_name, T["not_available"], C_RED, C_BLUE
-                        )
-                    )
-
-            # --- CPU Temperaturen ---
-            label_cpu_temp = T["cpu_temp"]
-            label_na = T["not_available"]
-
-            try:
-                temps = psutil.sensors_temperatures()
-                if temps:
-                    for name, entries in temps.items():
-                        if entries:
-                            temp = entries[0].current
-                            html.append(
-                                make_safe_row(
-                                    "🌡️",
-                                    f"{label_cpu_temp} ({name})",
-                                    f"{temp:.1f}°C",
-                                    C_GREEN,
-                                    C_BLUE,
-                                )
-                            )
-                else:
-                    html.append(
-                        make_safe_row("🌡️", label_cpu_temp, label_na, C_RED, C_BLUE)
-                    )
-            except (AttributeError, PermissionError):
-                html.append(make_safe_row("🌡️", label_cpu_temp, label_na, C_RED, C_BLUE))
-
-            # Uptime Berechnung (Robust gegen Boot-Time Fehler)
-            try:
-                uptime_sec = int(time.time() - psutil.boot_time())
-                uptime_str = str(timedelta(seconds=uptime_sec))
-            except:
-                uptime_str = "N/A"
-
-            html.append(make_safe_row("⏱️", "Uptime", uptime_str, C_GREEN, C_BLUE))
-
-            if pbar:
-                smooth_set_value(pbar, 30, f"💻 {T['prog_sysinfo']}")
-
-            # --- Tools (Status mit schlichten Emojis) ---
-            is_de = getattr(self, "LANG", "de").lower() == "de"
-
-            # --- Tools (Status mit schlichten Emojis) ---
-            tool_list = [
-                "pacman",
-                "yay",
-                "git",
-                "patch",
-                "zip",
-                "nmap",
-                "hydra",
-                "john",
-                "python3",
-                "pip",
-                "ssh",
-                "sqlmap",
-                "wireshark",
-                "nikto",
-                "tcpdump",
-                "aircrack-ng",
-                "hashcat",
-            ]
-
-            for i, tool_name in enumerate(tool_list):
-                path = shutil.which(tool_name)
-                ok = bool(path)
-                status_icon = "✅" if ok else "❌"
-
-                # Status-Text nach Sprache
-                if ok:
-                    info = "aktiv" if is_de else "on"
-                    try:
-                        # John the Ripper eigene Version
-                        if tool_name == "john":
-                            info_raw = (
-                                subprocess.check_output(
-                                    [tool_name, "--list=build-info"],
-                                    stderr=subprocess.STDOUT,
-                                    timeout=1,
-                                )
-                                .decode()
-                                .strip()
-                            )
-                        else:
-                            info_raw = (
-                                subprocess.check_output(
-                                    [tool_name, "--version"],
-                                    stderr=subprocess.STDOUT,
-                                    timeout=1,
-                                )
-                                .decode()
-                                .strip()
-                            )
-                        match = re.search(r"\d+(?:\.\d+)+|\d+", info_raw)
-                        if match:
-                            info = f"v{match.group(0)}"
-                    except:
-                        pass
-                else:
-                    info = "nicht verfügbar" if is_de else "off"
-
-                html.append(
-                    make_safe_row(
-                        status_icon,
-                        tool_name.capitalize(),
-                        info,
-                        C_GREEN if ok else C_RED,
-                        C_BLUE if ok else C_RED,
-                    )
-                )
-
-                if i % 4 == 0:
-                    QApplication.processEvents()  # UI flüssig halten
-
-                if pbar:
-                    progress = 30 + int((i + 1) * 20 / len(tool_list))
-                    smooth_set_value(
-                        pbar, progress, f"🔍 {T['prog_tool']}: {tool_name}"
-                    )
-
-            # --- Python Pakete ---
-            for pkg in ["PyQt6", "requests"]:
-                ok = importlib.util.find_spec(pkg) is not None
-                html.append(
-                    make_safe_row(
-                        "📦",
-                        pkg.capitalize(),
-                        T["ok"] if ok else T["missing"],
-                        C_GREEN if ok else C_RED,
-                        C_BLUE,
-                    )
-                )
-
-            # --- Live Netzwerk Check (Ersetzt urllib3 durch socket/requests) ---
-            try:
-                start_p = time.perf_counter()
-                # Verbindung zu Google DNS testen
-                test_conn = socket.create_connection(("8.8.8.8", 53), timeout=1.5)
-                ping_ms = int((time.perf_counter() - start_p) * 1000)
-                local_ip = test_conn.getsockname()[0]
-                test_conn.close()
-
-                html.append(
-                    make_safe_row(
-                        "📡", T["network"], f"Online ({local_ip})", C_GREEN, C_BLUE
-                    )
-                )
-                html.append(
-                    make_safe_row("⚡", T["ping"], f"{ping_ms} ms", C_GREEN, C_BLUE)
-                )
-            except:
-                html.append(make_safe_row("❌", T["network"], "Offline", C_RED, C_RED))
-            if pbar:
-                smooth_set_value(pbar, 65, f"🌐 {T['prog_network']}")
-
-            # --- Repos prüfen ---
-            repo_list = [
-                ("📡", "Streamboard Oscam", "git.streamboard.tv"),
-                ("🐙", "OSCam Emu Mirror", "github.com"),
-                ("⭐", "speedy Oscam Emu", "github.com"),
-                ("🔗", "GitHub API Server", "api.github.com"),
-            ]
-            for i, (icon, r_name, host) in enumerate(repo_list):
-                try:
-                    socket.gethostbyname(host)
-                    html.append(
-                        make_safe_row(
-                            icon, r_name, T["online"], C_REPO_NAME, C_REPO_VAL, S_REPO
-                        )
-                    )
-                except:
-                    html.append(
-                        make_safe_row(icon, r_name, T["offline"], C_RED, C_RED, S_REPO)
-                    )
-                if pbar:
-                    smooth_set_value(
-                        pbar,
-                        70 + int((i + 1) * 15 / len(repo_list)),
-                        f"📡 {T['prog_repo']}: {r_name}",
-                    )
-
-            # --- Statistik ---
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            total_stats, git_count = 0, 0
-            repo = "speedy005/Oscam-Emu-patch-Manager"
-            headers = {"User-Agent": "Python-Requests"}
-            try:
-                res = requests.get(
-                    f"https://api.github.com/repos/{repo}/releases",
-                    headers=headers,
-                    timeout=10,
-                )
-                if res.status_code == 200:
-                    for release in res.json():
-                        for asset in release.get("assets", []):
-                            git_count += int(asset.get("download_count", 0))
-            except:
-                pass
-
-            try:
-                tool_dir = os.path.dirname(os.path.abspath(__file__))
-            except NameError:
-                tool_dir = os.getcwd()
-
-            counter_file = os.path.join(tool_dir, "install_counter.txt")
-            if not os.path.exists(counter_file) or os.stat(counter_file).st_size == 0:
-                with open(counter_file, "w") as f:
-                    f.write("0")
-            with open(counter_file, "r") as f:
-                try:
-                    install_count = int(f.read().strip())
-                except:
-                    install_count = 0
-            install_count += 1
-            with open(counter_file, "w") as f:
-                f.write(str(install_count))
-            total_stats += install_count
-            usage_count = str(total_stats)
-            if pbar:
-                smooth_set_value(pbar, 88, f"📊 {T['prog_stats']}")
-
-            # --- Statistik HTML ---
-            html.append(
-                f"<div style=\"text-align:center; font-family:'Arial Black', sans-serif; margin-top:20px;\">"
-                # Titel
-                f'<div style="font-size:32pt; font-weight:bold; margin-bottom:10px;">'
-                f"<span style=\"font-family:'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif;\">📊</span> "
-                f'<span style="color:#FFFF00; font-weight:bold;">{T.get("stats_title", "STATISTICS")}</span>'
-                f"</div>"
-                # GitHub Statistik
-                f'<div style="font-size:28pt; font-weight:bold; margin:12px 0;">'
-                f"<span style=\"font-family:'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif;\">🐙</span> "
-                f'<span style="color:#00FF00; font-weight:bold;">{T.get("stats_github", "GitHub:")}</span> '
-                f'<span style="color:{C_BLUE}; font-weight:bold;">{git_count}</span>'
-                f"</div>"
-                # Local Install Statistik
-                f'<div style="font-size:28pt; font-weight:bold; margin:12px 0;">'
-                f"<span style=\"font-family:'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif;\">💾</span> "
-                f'<span style="color:#F57A08; font-weight:bold;">{T.get("stats_local", "Local:")}</span> '
-                f'<span style="color:{C_BLUE}; font-weight:bold;">{install_count}</span>'
-                f"</div>"
-                # Total Statistik
-                f'<div style="font-size:30pt; font-weight:bold; margin-top:15px;">'
-                f"<span style=\"font-family:'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif;\">📊</span> "
-                f'<span style="color:#FFFF00; font-weight:bold;">{T.get("stats_total", "Total:")}</span> '
-                f'<span style="color:{C_BLUE}; font-weight:bold;">{usage_count}</span>'
-                f"</div>"
-                f"</div>"
-            )
-            if pbar:
-                smooth_set_value(pbar, 90, f"⚙️ {T['prog_finish']}")
-
-            # --- Footer ---
-            footer_html = (
-                f'<div style="text-align:center; line-height:1.2; margin-top:10px;">'
-                f'<span style="font-family:{F_EMOJI}; font-size:{S_EMOJI};">✅ </span>'
-                f'<span style="font-family:\'Arial Black\', sans-serif; font-size:{S_NORM}; font-weight:bold; color:{C_GREEN};">{T["foot_ok"]}</span>'
-                f'<span style="font-family:\'Arial Black\', sans-serif; font-size:{S_NORM}; font-weight:bold; color:{C_BLUE};">&nbsp;{T["foot_ready"]}</span>'
-                f"</div>"
-            )
-            html.append(footer_html)
-
-            widget.setHtml("".join(html))
-            widget.moveCursor(QTextCursor.MoveOperation.End)
-
-        except Exception as e:
-            if widget:
-                widget.append(f"<br><b style='color:red;'>Check Error: {e}</b>")
-
-        finally:
-            self.check_for_update_on_start()
-            self.is_loading = False
-            self._checking_active = False
-            if pbar:
-                smooth_set_value(pbar, 100, f"✅ {T['prog_done']}")
-            QApplication.processEvents()
         # =====================
         # INIT UI
         # =====================
@@ -29862,12 +30564,17 @@ class PatchManagerGUI(QWidget):
     # BUTTON CALLBACKS
     # =====================
 
+    
     def apply_patch(self, info_widget=None, progress_callback=None):
         """
         Wendet den OSCam-Emu-Patch auf das konfigurierte
-        OSCam-Quellverzeichnis an.
+        Streamboard-OSCam-Quellverzeichnis an.
 
-        TEMP_REPO muss auf das OSCam-Quellverzeichnis zeigen.
+        Das Zielverzeichnis wird ausschließlich über STREAMREPO
+        bestimmt.
+
+        Erwartetes Verzeichnis:
+            <PLUGIN_DIR>\\streamboard-git
         """
 
         if hasattr(self, "hide_final_label"):
@@ -29879,11 +30586,23 @@ class PatchManagerGUI(QWidget):
         import os
         from PyQt6.QtWidgets import QApplication
 
+        # ---------------------------------------------------------
+        # Info-Widget
+        # ---------------------------------------------------------
+
         info_widget = (
             info_widget
             if info_widget is not None
-            else getattr(self, "info_text", None)
+            else getattr(
+                self,
+                "info_text",
+                None
+            )
         )
+
+        # ---------------------------------------------------------
+        # Sprache
+        # ---------------------------------------------------------
 
         lang = getattr(
             self,
@@ -29891,15 +30610,15 @@ class PatchManagerGUI(QWidget):
             "de"
         ).lower()
 
+        # ---------------------------------------------------------
+        # ProgressBar
+        # ---------------------------------------------------------
+
         pbar = getattr(
             self,
             "progress_bar",
             None
         )
-
-        # ---------------------------------------------------------
-        # ProgressBar
-        # ---------------------------------------------------------
 
         rainbow = (
             "qlineargradient("
@@ -29925,7 +30644,7 @@ class PatchManagerGUI(QWidget):
             }}
 
             QProgressBar::chunk {{
-                background: {rainbow}
+                background: {rainbow};
                 border-radius: 4px;
             }}
         """
@@ -29948,11 +30667,15 @@ class PatchManagerGUI(QWidget):
         """
 
         def update_p(value, is_err=False):
+            """Aktualisiert ProgressBar und optionalen Callback."""
+
             if pbar:
                 try:
                     pbar.setFormat("%p%")
                     pbar.setStyleSheet(
-                        style_error if is_err else style_rainbow
+                        style_error
+                        if is_err
+                        else style_rainbow
                     )
                     pbar.setValue(value)
                     pbar.show()
@@ -29971,9 +30694,15 @@ class PatchManagerGUI(QWidget):
                 pass
 
         def play_apply_sound(success=True):
+            """Spielt Abschluss- bzw. Fehlerton."""
+
             try:
-                if "safe_play" in globals():
-                    globals()["safe_play"](
+                safe_play = globals().get(
+                    "safe_play"
+                )
+
+                if safe_play:
+                    safe_play(
                         "complete.oga"
                         if success
                         else "dialog-error.oga"
@@ -29981,34 +30710,40 @@ class PatchManagerGUI(QWidget):
             except Exception:
                 pass
 
-        # ---------------------------------------------------------
-        # Konfiguration
-        # ---------------------------------------------------------
+        # =========================================================
+        # KONFIGURATION
+        # =========================================================
 
         patch_file = globals().get(
             "PATCH_FILE",
-            getattr(self, "PATCH_FILE", "")
+            getattr(
+                self,
+                "PATCH_FILE",
+                ""
+            )
         )
 
-        source_dir = getattr(
-            self,
-            "TEMP_REPO",
-            globals().get("TEMP_REPO", "")
+        # ---------------------------------------------------------
+        # WICHTIG:
+        # Das OSCam-Quellverzeichnis kommt ausschließlich
+        # aus STREAMREPO.
+        # ---------------------------------------------------------
+
+        source_dir = globals().get(
+            "STREAMREPO",
+            ""
         )
 
         if not source_dir:
             source_dir = getattr(
                 self,
-                "OSCAM_REPO_DIR",
-                globals().get("OSCAM_REPO_DIR", "")
+                "STREAMREPO",
+                ""
             )
 
-        if not source_dir:
-            source_dir = getattr(
-                self,
-                "OSCAM_SOURCE_DIR",
-                globals().get("OSCAM_SOURCE_DIR", "")
-            )
+        # ---------------------------------------------------------
+        # PATCH_FILE prüfen
+        # ---------------------------------------------------------
 
         if not patch_file:
             self.append_info(
@@ -30016,22 +30751,47 @@ class PatchManagerGUI(QWidget):
                 "❌ PATCH_FILE ist nicht konfiguriert!",
                 "error"
             )
-            update_p(100, True)
-            play_apply_sound(False)
+
+            update_p(
+                100,
+                True
+            )
+
+            play_apply_sound(
+                False
+            )
+
             return False
+
+        # ---------------------------------------------------------
+        # STREAMREPO prüfen
+        # ---------------------------------------------------------
 
         if not source_dir:
             self.append_info(
                 info_widget,
                 (
-                    "❌ Kein OSCam-Quellverzeichnis konfiguriert.\n"
-                    "TEMP_REPO muss auf das OSCam-Repository zeigen."
+                    "❌ STREAMREPO ist nicht konfiguriert!\n\n"
+                    "Das OSCam-Quellverzeichnis muss über "
+                    "STREAMREPO definiert werden."
                 ),
                 "error"
             )
-            update_p(100, True)
-            play_apply_sound(False)
+
+            update_p(
+                100,
+                True
+            )
+
+            play_apply_sound(
+                False
+            )
+
             return False
+
+        # ---------------------------------------------------------
+        # Pfade normalisieren
+        # ---------------------------------------------------------
 
         patch_file = os.path.abspath(
             os.path.expanduser(
@@ -30055,11 +30815,19 @@ class PatchManagerGUI(QWidget):
 
         update_p(10)
 
+        self.append_info(
+            info_widget,
+            f"📁 OSCam-Quellverzeichnis:\n{source_dir}",
+            "info"
+        )
+
         # ---------------------------------------------------------
-        # Patch prüfen
+        # Patch-Datei prüfen
         # ---------------------------------------------------------
 
-        if not os.path.isfile(patch_file):
+        if not os.path.isfile(
+            patch_file
+        ):
             msg = self.get_t(
                 "patch_file_missing",
                 "❌ Patch-Datei fehlt!"
@@ -30073,11 +30841,22 @@ class PatchManagerGUI(QWidget):
                 "error"
             )
 
-            update_p(100, True)
-            play_apply_sound(False)
+            update_p(
+                100,
+                True
+            )
+
+            play_apply_sound(
+                False
+            )
 
             if pbar:
-                pbar.setFormat("❌ Datei fehlt")
+                try:
+                    pbar.setFormat(
+                        "❌ Datei fehlt"
+                    )
+                except Exception:
+                    pass
 
             return False
 
@@ -30085,7 +30864,9 @@ class PatchManagerGUI(QWidget):
         # OSCam-Verzeichnis prüfen
         # ---------------------------------------------------------
 
-        if not os.path.isdir(source_dir):
+        if not os.path.isdir(
+            source_dir
+        ):
             self.append_info(
                 info_widget,
                 (
@@ -30095,13 +30876,20 @@ class PatchManagerGUI(QWidget):
                 "error"
             )
 
-            update_p(100, True)
-            play_apply_sound(False)
+            update_p(
+                100,
+                True
+            )
+
+            play_apply_sound(
+                False
+            )
+
             return False
 
-        # ---------------------------------------------------------
-        # Sicherstellen, dass es OSCam ist
-        # ---------------------------------------------------------
+        # =========================================================
+        # OSCAM QUELLCODE PRÜFEN
+        # =========================================================
 
         required_files = (
             "Makefile",
@@ -30113,7 +30901,10 @@ class PatchManagerGUI(QWidget):
             filename
             for filename in required_files
             if not os.path.isfile(
-                os.path.join(source_dir, filename)
+                os.path.join(
+                    source_dir,
+                    filename
+                )
             )
         ]
 
@@ -30133,15 +30924,25 @@ class PatchManagerGUI(QWidget):
                 "error"
             )
 
-            update_p(100, True)
-            play_apply_sound(False)
+            update_p(
+                100,
+                True
+            )
+
+            play_apply_sound(
+                False
+            )
+
             return False
 
         # ---------------------------------------------------------
         # Logger
         # ---------------------------------------------------------
 
-        def logger(text, level="info"):
+        def logger(
+            text,
+            level="info"
+        ):
             try:
                 self.append_info(
                     info_widget,
@@ -30151,15 +30952,17 @@ class PatchManagerGUI(QWidget):
             except Exception:
                 pass
 
-        # ---------------------------------------------------------
-        # Startmeldung
-        # ---------------------------------------------------------
+        # =========================================================
+        # STARTMELDUNG
+        # =========================================================
 
         start_msg = self.get_t(
             "executing_git_apply",
             "🚀 Wende Patch an..."
         ).format(
-            patch=os.path.basename(patch_file)
+            patch=os.path.basename(
+                patch_file
+            )
         )
 
         self.append_info(
@@ -30170,24 +30973,40 @@ class PatchManagerGUI(QWidget):
 
         self.append_info(
             info_widget,
-           f"📁 Ziel: {source_dir}",
+            f"📁 Ziel: {source_dir}",
             "info"
-       )
+        )
+
+        self.append_info(
+            info_widget,
+            f"📄 Patch: {patch_file}",
+            "info"
+        )
 
         update_p(40)
 
-        # ---------------------------------------------------------
-        # Patch anwenden
-        # ---------------------------------------------------------
+        # =========================================================
+        # PATCH ANWENDEN
+        # =========================================================
 
         try:
 
+            self.append_info(
+                info_widget,
+                "🔧 Führe git apply aus...",
+                "info"
+            )
+
             code = run_bash(
-                f'git apply "{patch_file}"',
+                f'git apply {patch_file}',
                 cwd=source_dir,
                 logger=logger,
                 lang=lang
             )
+
+            # -----------------------------------------------------
+            # ERFOLG
+            # -----------------------------------------------------
 
             if code == 0:
 
@@ -30200,15 +31019,31 @@ class PatchManagerGUI(QWidget):
                     "success"
                 )
 
+                self.append_info(
+                    info_widget,
+                    f"📁 Gepatchtes Repository:\n{source_dir}",
+                    "success"
+                )
+
                 update_p(100)
-                play_apply_sound(True)
+
+                play_apply_sound(
+                    True
+                )
 
                 if pbar:
-                    pbar.setFormat(
-                        "✅ Patch angewendet"
-                    )
+                    try:
+                        pbar.setFormat(
+                            "✅ Patch angewendet"
+                        )
+                    except Exception:
+                        pass
 
                 return True
+
+            # -----------------------------------------------------
+            # GIT APPLY FEHLER
+            # -----------------------------------------------------
 
             self.append_info(
                 info_widget,
@@ -30219,15 +31054,46 @@ class PatchManagerGUI(QWidget):
                 "error"
             )
 
-            update_p(100, True)
-            play_apply_sound(False)
+            self.append_info(
+                info_widget,
+                (
+                    f"📁 Zielverzeichnis:\n"
+                    f"{source_dir}"
+                ),
+                "error"
+            )
+
+            self.append_info(
+                info_widget,
+                (
+                    f"📄 Patch-Datei:\n"
+                    f"{patch_file}"
+                ),
+                "error"
+            )
+
+            update_p(
+                100,
+                True
+            )
+
+            play_apply_sound(
+                False
+            )
 
             if pbar:
-                pbar.setFormat(
-                    "❌ Fehler beim Patchen"
-                )
+                try:
+                    pbar.setFormat(
+                        "❌ Fehler beim Patchen"
+                    )
+                except Exception:
+                    pass
 
             return False
+
+        # =========================================================
+        # SCHWERER FEHLER
+        # =========================================================
 
         except Exception as exc:
 
@@ -30240,21 +31106,36 @@ class PatchManagerGUI(QWidget):
                 "error"
             )
 
-            update_p(100, True)
-            play_apply_sound(False)
+            update_p(
+                100,
+                True
+            )
+
+            play_apply_sound(
+                False
+            )
 
             if pbar:
-                pbar.setFormat(
-                    "❌ Fehler beim Patchen"
-                )
+                try:
+                    pbar.setFormat(
+                        "❌ Fehler beim Patchen"
+                    )
+                except Exception:
+                    pass
 
             return False
 
+        # =========================================================
+        # ABSCHLUSS
+        # =========================================================
+
         finally:
+
             try:
                 QApplication.processEvents()
             except Exception:
                 pass
+
 
     def change_old_(self, info_widget=None, progress_callback=None):
         # --- Final Label verstecken ---
