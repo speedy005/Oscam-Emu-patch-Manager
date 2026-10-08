@@ -856,7 +856,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "7.4.0"
+APP_VERSION = "7.4.1"
 # ===================== PATCH DIRS =====================
 def get_best_patch_dir():
     """Bestimmt den besten Patch-Ordner (S3, lokal, Home)."""
@@ -7123,7 +7123,7 @@ class CinematicMatrixSplash(QWidget):
             r" █  |_|   |_||__| |__||_|  |__||__| |__||_______||_______||___|  |_|      █ ",
             r" █                                                                        █ ",
             r" █──────────────────[ SYSTEM: NEURAL_LINK OPERATIONAL ]───────────────────█ ",
-            r" █                   >> OSCAM EMU PATCH MANAGER v7.4.0  <<               █ ",
+            r" █                   >> OSCAM EMU PATCH MANAGER v7.4.1  <<               █ ",
             r" █             >> CODENAME: Speedy_Oscam-_Patch_Manager 2026 <<           █ ",
             r" ◥◣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◢◤ "
         ]
@@ -17020,26 +17020,53 @@ class PatchManagerGUI(QWidget):
             safe_play_func("dialog-information.oga")
 
     def handle_online_patch_button(self):
-        """Download mit Regenbogen-Progress: 100% -> Reset -> Meldung (DE/EN)."""
+        """Online-Patch herunterladen mit Statusmeldungen und echtem Download-Fortschritt."""
+
         from PyQt6.QtWidgets import QInputDialog, QMessageBox, QApplication
         from PyQt6.QtCore import QTimer
-        import os, requests, re
+        import requests
+        import re
+        import os
 
+        # ---------------------------------------------------------
         # Hilfsfunktionen
-        def _(k, d):
-            return getattr(self, "get_t", lambda x, y: y)(k, d)
+        # ---------------------------------------------------------
 
-        lang = str(getattr(self, "lang", getattr(self, "LANG", "en"))).lower()[:2]
-        is_de = lang == "de"
-        pbar = getattr(self, "progress_bar", None)
-        safe_play_func = globals().get("safe_play")
+        def _(key, default):
+            return getattr(self, "get_t", lambda x, y: y)(key, default)
 
-        # Texte
-        T_WAIT = "🔍 " + _("patch_dl_wait", "Prüfe Versionen...")
-        T_START = "🌐 " + _("patch_dl_start", "Download: ")
-        T_SAVE = "💾 " + _("patch_dl_save", "Gespeichert: ")
-        T_DONE = "Fertig!" if is_de else "Done!"
-        T_CANCEL_MSG = "Abgebrochen" if is_de else "Cancelled"
+        def set_status(text, value=None, color=None):
+            """Progressbar aktualisieren und GUI sofort neu zeichnen."""
+            if not pbar:
+                return
+
+            if value is not None:
+                pbar.setValue(max(0, min(100, int(value))))
+
+            pbar.setFormat(text)
+
+            if color:
+                pbar.setStyleSheet(
+                    f"""
+                    QProgressBar {{
+                        text-align: center;
+                        font-weight: 900;
+                        border: 2px solid {color};
+                        border-radius: 6px;
+                        background-color: #111;
+                        color: {color};
+                        font-size: 13pt;
+                    }}
+                    QProgressBar::chunk {{
+                        background-color: {color};
+                        border-radius: 4px;
+                    }}
+                    """
+                )
+
+            pbar.show()
+            pbar.repaint()
+            QApplication.processEvents()
 
         def restore_style():
             if pbar:
@@ -17047,115 +17074,608 @@ class PatchManagerGUI(QWidget):
                 pbar.setFormat("%p%")
                 pbar.setStyleSheet(
                     """
-                    QProgressBar { border: 1px solid #444; border-radius: 8px; background-color: #1A1A1A; 
-                    color: black; text-align: center; font-weight: bold; }
-                    QProgressBar::chunk { background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
-                    stop:0 #F37804, stop:1 #FFD700); border-radius: 8px; }
-                """
+                    QProgressBar {
+                        border: 1px solid #444;
+                        border-radius: 8px;
+                        background-color: #1A1A1A;
+                        color: black;
+                        text-align: center;
+                        font-weight: bold;
+                    }
+
+                    QProgressBar::chunk {
+                        background-color: qlineargradient(
+                            x1:0, y1:0, x2:1, y2:0,
+                            stop:0 #F37804,
+                            stop:1 #FFD700
+                        );
+                        border-radius: 8px;
+                    }
+                    """
                 )
 
-        # 1. REGENBOGEN START (Schwarz, 15pt)
-        if pbar:
-            rainbow = (
-                "qlineargradient(x1:0, y1:0, x2:1, y2:0, "
-                "stop:0.0 #FF0000, stop:0.2 #FF7F00, stop:0.4 #FFFF00, "
-                "stop:0.6 #00FF00, stop:0.8 #0000FF, stop:1.0 #8B00FF);"
+        def play_sound(filename):
+            safe_play_func = globals().get("safe_play")
+            if safe_play_func:
+                try:
+                    safe_play_func(filename)
+                except Exception:
+                    pass
+
+        # ---------------------------------------------------------
+        # Sprache
+        # ---------------------------------------------------------
+
+        lang = str(
+            getattr(
+                self,
+                "lang",
+                getattr(self, "LANG", "en")
             )
+        ).lower()[:2]
+
+        is_de = lang == "de"
+
+        # ---------------------------------------------------------
+        # Progressbar
+        # ---------------------------------------------------------
+
+        pbar = getattr(self, "progress_bar", None)
+
+        rainbow = (
+            "qlineargradient("
+            "x1:0, y1:0, x2:1, y2:0, "
+            "stop:0.0 #FF0000, "
+            "stop:0.2 #FF7F00, "
+            "stop:0.4 #FFFF00, "
+            "stop:0.6 #00FF00, "
+            "stop:0.8 #0000FF, "
+            "stop:1.0 #8B00FF"
+            ");"
+        )
+
+        if pbar:
             pbar.setStyleSheet(
                 f"""
                 QProgressBar {{
-                    text-align: center; font-weight: 900; border: 2px solid #222;
-                    border-radius: 6px; background-color: #111; color: black; font-size: 15pt;
+                    text-align: center;
+                    font-weight: 900;
+                    border: 2px solid #222;
+                    border-radius: 6px;
+                    background-color: #111;
+                    color: black;
+                    font-size: 13pt;
                 }}
-                QProgressBar::chunk {{ background-color: {rainbow}; border-radius: 4px; }}
-            """
+
+                QProgressBar::chunk {{
+                    background-color: {rainbow};
+                    border-radius: 4px;
+                }}
+                """
             )
-            pbar.setFormat(f"{T_WAIT} %p%")
-            pbar.setValue(15)
+
+            pbar.setValue(0)
+            pbar.setFormat(
+                "🔍 " +
+                _("patch_dl_wait", "Prüfe verfügbare Patches...")
+            )
             pbar.show()
+            pbar.repaint()
             QApplication.processEvents()
 
-        # Versionen laden
-        display_items = {}
-        patch_list = globals().get(
-            "ONLINE_PATCHES", getattr(self, "ONLINE_PATCHES", {})
-        )
-        for name, url in patch_list.items():
-            try:
-                res = requests.get(url, headers={"Range": "bytes=0-511"}, timeout=3)
-                v = re.search(r"patch version:\s*([\d\.-]+)", res.text)
-                version = v.group(1) if v else "unknown"
-                display_items[f"{name} [{version}]"] = (url, version, name)
-            except:
-                display_items[f"{name} [Offline]"] = (url, "unknown", name)
+        # ---------------------------------------------------------
+        # Texte
+        # ---------------------------------------------------------
 
-        if safe_play_func:
-            safe_play_func("dialog-information.oga")
+        T_CHECKING = (
+            "🔍 " +
+            _("patch_dl_wait", "Prüfe verfügbare Patches...")
+        )
+
+        T_FOUND = (
+            "📦 " +
+            _("patch_dl_found", "Patches gefunden")
+        )
+
+        T_START = (
+            "🌐 " +
+            _("patch_dl_start", "Download wird gestartet...")
+        )
+
+        T_DOWNLOADING = (
+            "⬇️ " +
+            _("patch_dl_downloading", "Download")
+        )
+
+        T_SAVING = (
+            "💾 " +
+            _("patch_dl_saving", "Speichere Patch...")
+        )
+
+        T_DONE = (
+            "✅ " +
+            _("patch_dl_done", "Patch erfolgreich heruntergeladen!")
+        )
+
+        T_CANCELLED = (
+            "❌ " +
+            _("patch_dl_cancelled", "Download abgebrochen.")
+        )
+
+        T_ERROR = (
+            "❌ " +
+            _("patch_dl_error", "Fehler beim Download")
+        )
+
+        # ---------------------------------------------------------
+        # Sound + Status
+        # ---------------------------------------------------------
+
+        play_sound("dialog-information.oga")
+        set_status(T_CHECKING, 10)
+
+        # ---------------------------------------------------------
+        # Patch-Liste holen
+        # ---------------------------------------------------------
+
+        patch_list = globals().get(
+            "ONLINE_PATCHES",
+            getattr(self, "ONLINE_PATCHES", {})
+        )
+
+        if not patch_list:
+            play_sound("dialog-error.oga")
+
+            set_status(
+                "❌ " +
+                _("patch_dl_no_patches", "Keine Patches verfügbar."),
+                0,
+                "#FF3333"
+            )
+
+            QMessageBox.warning(
+                self,
+                _("patch_dl_title", "Patch Download"),
+                _("patch_dl_no_patches", "Es wurden keine Online-Patches gefunden.")
+            )
+
+            QTimer.singleShot(3000, restore_style)
+            return
+
+        # ---------------------------------------------------------
+        # Versionen prüfen
+        # ---------------------------------------------------------
+
+        display_items = {}
+
+        total_patches = len(patch_list)
+
+        for index, (name, url) in enumerate(patch_list.items(), start=1):
+
+            progress = 10 + int((index / total_patches) * 25)
+
+            set_status(
+                f"🔍 Prüfe {name}... {progress}%",
+                progress
+            )
+
+            try:
+                res = requests.get(
+                    url,
+                    headers={"Range": "bytes=0-511"},
+                    timeout=5
+                )
+
+                res.raise_for_status()
+
+                match = re.search(
+                    r"patch version:\s*([\d\.-]+)",
+                    res.text,
+                    re.IGNORECASE
+                )
+
+                version = match.group(1) if match else "unknown"
+
+                display_items[
+                    f"{name} [{version}]"
+                ] = (
+                    url,
+                    version,
+                    name
+                )
+
+            except requests.RequestException:
+                display_items[
+                    f"{name} [Offline]"
+                ] = (
+                    url,
+                    "unknown",
+                    name
+                )
+
+            except Exception:
+                display_items[
+                    f"{name} [Fehler]"
+                ] = (
+                    url,
+                    "unknown",
+                    name
+                )
+
+        # ---------------------------------------------------------
+        # Keine Ergebnisse
+        # ---------------------------------------------------------
+
+        if not display_items:
+            play_sound("dialog-error.oga")
+
+            set_status(
+                "❌ Keine Patches gefunden",
+                0,
+                "#FF3333"
+            )
+
+            QMessageBox.warning(
+                self,
+                _("patch_dl_title", "Patch Download"),
+                _("patch_dl_none", "Es konnten keine Patches gefunden werden.")
+            )
+
+            QTimer.singleShot(3000, restore_style)
+            return
+
+        set_status(
+            f"📦 {T_FOUND}: {len(display_items)}",
+            40
+        )
+
+        # ---------------------------------------------------------
+        # Patch auswählen
+        # ---------------------------------------------------------
 
         dialog = QInputDialog(self)
-        dialog.setWindowTitle(_("patch_dl_title", "Patch Download"))
-        dialog.setLabelText(_("patch_dl_select", "Wähle einen Patch:"))
-        dialog.setComboBoxItems(list(display_items.keys()))
+
+        dialog.setWindowTitle(
+            _("patch_dl_title", "Patch Download")
+        )
+
+        dialog.setLabelText(
+            _("patch_dl_select", "Wähle einen Patch:")
+        )
+
+        dialog.setComboBoxItems(
+            list(display_items.keys())
+        )
+
         dialog.setOkButtonText("OK")
-        dialog.setCancelButtonText("Abbrechen" if is_de else "Cancel")
 
-        if dialog.exec():
-            item = dialog.textValue()
-            url, version, original_name = display_items[item]
-            if pbar:
-                pbar.setFormat(f"{T_START} %p%")
-                pbar.setValue(60)
+        dialog.setCancelButtonText(
+            "Abbrechen" if is_de else "Cancel"
+        )
 
-            try:
-                response = requests.get(url, timeout=15)
+        QApplication.processEvents()
+
+        # ---------------------------------------------------------
+        # Abbruch
+        # ---------------------------------------------------------
+
+        if not dialog.exec():
+
+            play_sound("dialog-warning.oga")
+
+            set_status(
+                T_CANCELLED,
+                100,
+                "#FF3333"
+            )
+
+            QTimer.singleShot(
+                500,
+                lambda: (
+                    set_status(T_CANCELLED, 0, "#FF3333")
+                )
+            )
+
+            QTimer.singleShot(
+                3000,
+                restore_style
+            )
+
+            return
+
+        # ---------------------------------------------------------
+        # Auswahl auslesen
+        # ---------------------------------------------------------
+
+        item = dialog.textValue()
+
+        if item not in display_items:
+            play_sound("dialog-error.oga")
+
+            set_status(
+                "❌ Ungültige Patch-Auswahl",
+                0,
+                "#FF3333"
+            )
+
+            QTimer.singleShot(3000, restore_style)
+            return
+
+        url, version, original_name = display_items[item]
+
+        # ---------------------------------------------------------
+        # Download vorbereiten
+        # ---------------------------------------------------------
+
+        set_status(
+            f"{T_START} {original_name}",
+            45
+        )
+
+        QApplication.processEvents()
+
+        # Dateiname sicher erzeugen
+        clean_name = re.sub(
+            r"[^a-zA-Z0-9_-]+",
+            "_",
+            original_name
+        ).strip("_")
+
+        if not clean_name:
+            clean_name = "patch"
+
+        if version == "unknown":
+            file_name = f"{clean_name}.patch"
+        else:
+            file_name = f"{clean_name}_v{version}.patch"
+
+        # ---------------------------------------------------------
+        # Download
+        # ---------------------------------------------------------
+
+        try:
+
+            with requests.get(
+                url,
+                timeout=30,
+                stream=True
+            ) as response:
+
                 response.raise_for_status()
 
-                file_name = f"{original_name.split()[0].replace('(', '').lower()}_v{version}.patch"
-                with open(file_name, "w", encoding="utf-8") as f:
-                    f.write(response.text)
-
-                # --- ERFOLGS-ABLAUF: 100% -> Reset -> Meldung ---
-                if safe_play_func:
-                    safe_play_func("complete.oga")
-                if pbar:
-                    pbar.setValue(100)  # Erst voll
-                    pbar.setFormat("100%")
-                    pbar.repaint()
-
-                    def show_success():
-                        pbar.setValue(0)  # Dann ausblenden (0%)
-                        pbar.setFormat(f"✅ {T_DONE}")
-                        pbar.repaint()
-                        QTimer.singleShot(3000, restore_style)
-
-                    QTimer.singleShot(500, show_success)
-
-            except Exception as e:
-                if safe_play_func:
-                    safe_play_func("dialog-error.oga")
-                if pbar:
-                    pbar.setStyleSheet("QProgressBar { color: red; font-weight: 900; }")
-
-        else:
-            # --- ABBRUCH-ABLAUF: 100% -> Reset -> Meldung ---
-            if safe_play_func:
-                safe_play_func("dialog-warning.oga")
-            if pbar:
-                pbar.setValue(100)  # 1. Auf 100% (Regenbogen voll)
-                pbar.setFormat("100%")
-                pbar.repaint()
-                QApplication.processEvents()
-
-                def show_cancel_final():
-                    pbar.setValue(0)  # 2. Ausblenden (Reset auf 0)
-                    pbar.setFormat(f"❌ {T_CANCEL_MSG}")  # 3. Meldung in Rot
-                    pbar.setStyleSheet(
-                        "QProgressBar { text-align: center; color: red; font-weight: 900; border: 2px solid red; background: #111; font-size: 15pt; }"
+                total_size = int(
+                    response.headers.get(
+                        "content-length",
+                        0
                     )
-                    pbar.repaint()
-                    QTimer.singleShot(2500, restore_style)
+                )
 
-                QTimer.singleShot(500, show_cancel_final)
+                downloaded = 0
+
+                # Datei binär schreiben.
+                # Dadurch funktioniert es auch mit ungewöhnlichen
+                # Patch-Dateien.
+                with open(file_name, "wb") as file:
+
+                    for chunk in response.iter_content(
+                        chunk_size=64 * 1024
+                    ):
+
+                        if not chunk:
+                            continue
+
+                        file.write(chunk)
+
+                        downloaded += len(chunk)
+
+                        # -----------------------------------------
+                        # Echter Prozentfortschritt
+                        # -----------------------------------------
+
+                        if total_size > 0:
+
+                            percent = int(
+                                downloaded * 100 / total_size
+                            )
+
+                            downloaded_mb = (
+                                downloaded / 1024 / 1024
+                            )
+
+                            total_mb = (
+                                total_size / 1024 / 1024
+                            )
+
+                            status = (
+                                f"{T_DOWNLOADING}: "
+                                f"{percent}%  "
+                                f"({downloaded_mb:.1f} / "
+                                f"{total_mb:.1f} MB)"
+                            )
+
+                            set_status(
+                                status,
+                                percent
+                            )
+
+                        else:
+
+                            downloaded_mb = (
+                                downloaded / 1024 / 1024
+                            )
+
+                            set_status(
+                                f"{T_DOWNLOADING}: "
+                                f"{downloaded_mb:.1f} MB",
+                                50
+                            )
+
+            # -----------------------------------------------------
+            # Speichern erfolgreich
+            # -----------------------------------------------------
+
+            set_status(
+                T_SAVING,
+                100
+            )
+
+            QApplication.processEvents()
+
+            # Prüfen, ob Datei wirklich existiert
+            if not os.path.isfile(file_name):
+                raise IOError(
+                    "Die Patch-Datei konnte nicht erstellt werden."
+                )
+
+            file_size = os.path.getsize(file_name)
+
+            if file_size == 0:
+                raise IOError(
+                    "Der Server hat eine leere Patch-Datei geliefert."
+                )
+
+            # -----------------------------------------------------
+            # Erfolg
+            # -----------------------------------------------------
+
+            play_sound("complete.oga")
+
+            set_status(
+                f"✅ {T_DONE}  "
+                f"{os.path.basename(file_name)}",
+                100,
+                "#00FF66"
+            )
+
+            QMessageBox.information(
+                self,
+                _("patch_dl_success_title", "Patch Download"),
+                (
+                    _("patch_dl_success", "Patch erfolgreich gespeichert.")
+                    + "\n\n"
+                    + f"📄 {os.path.abspath(file_name)}"
+                    + "\n"
+                    + f"📦 {file_size / 1024 / 1024:.2f} MB"
+                )
+            )
+
+            # Nach Meldung wieder normale Progressbar
+            QTimer.singleShot(
+                3000,
+                restore_style
+            )
+
+        # ---------------------------------------------------------
+        # HTTP / Netzwerkfehler
+        # ---------------------------------------------------------
+
+        except requests.exceptions.Timeout:
+
+            play_sound("dialog-error.oga")
+
+            error_text = (
+                _("patch_dl_timeout", "Zeitüberschreitung beim Download.")
+            )
+
+            set_status(
+                f"❌ {error_text}",
+                0,
+                "#FF3333"
+            )
+
+            QMessageBox.critical(
+                self,
+                _("patch_dl_error_title", "Download-Fehler"),
+                error_text
+            )
+
+            QTimer.singleShot(
+                3000,
+                restore_style
+            )
+
+        except requests.exceptions.HTTPError as e:
+
+            play_sound("dialog-error.oga")
+
+            error_text = (
+                f"{T_ERROR}: HTTP {e.response.status_code}"
+                if e.response is not None
+                else str(e)
+            )
+
+            set_status(
+                f"❌ {error_text}",
+                0,
+                "#FF3333"
+            )
+
+            QMessageBox.critical(
+                self,
+                _("patch_dl_error_title", "Download-Fehler"),
+                error_text
+            )
+
+            QTimer.singleShot(
+                3000,
+                restore_style
+            )
+
+        except requests.exceptions.RequestException as e:
+
+            play_sound("dialog-error.oga")
+
+            error_text = (
+                _("patch_dl_network_error", "Netzwerkfehler:")
+                + f"\n{e}"
+            )
+
+            set_status(
+                "❌ Netzwerkfehler",
+                0,
+                "#FF3333"
+            )
+
+            QMessageBox.critical(
+                self,
+                _("patch_dl_error_title", "Download-Fehler"),
+                error_text
+            )
+
+            QTimer.singleShot(
+                3000,
+                restore_style
+            )
+
+        # ---------------------------------------------------------
+        # Sonstige Fehler
+        # ---------------------------------------------------------
+
+        except Exception as e:
+
+            play_sound("dialog-error.oga")
+
+            error_text = (
+                _("patch_dl_unknown_error", "Unerwarteter Fehler:")
+                + f"\n{e}"
+            )
+
+            set_status(
+                "❌ Fehler beim Patch-Download",
+                0,
+                "#FF3333"
+            )
+
+            QMessageBox.critical(
+                self,
+                _("patch_dl_error_title", "Download-Fehler"),
+                error_text
+            )
+
+            QTimer.singleShot(
+                3000,
+                restore_style
+            )
 
     def run_patch_process(self, patch_data, is_dry_run=True):
         """Führt den Patch-Befehl per Pipe aus (Simulation oder echt)."""
@@ -19117,6 +19637,65 @@ class PatchManagerGUI(QWidget):
 
             except Exception as e:
                 print(f"[change_colors] Config konnte nicht gespeichert werden: {e}")
+
+        # ============================================================
+        # 18b. FARBMELDUNG IM GROSSEN INFOSCREEN
+        #
+        # Nur bei einer tatsächlichen Änderung melden.
+        # Die Meldung wird ANGEHÄNGT und überschreibt keine
+        # vorhandenen Infoscreen-Meldungen.
+        # ============================================================
+        if config_changed and not getattr(self, "is_loading", False):
+
+            try:
+                info_widget = getattr(self, "info_text", None)
+
+                if info_widget is not None and hasattr(self, "append_info"):
+
+                    lang = str(getattr(self, "LANG", "de")).lower()
+
+                    if lang.startswith("de"):
+                        color_msg = (
+                            f"🎨 Farbe eingestellt: <b>{current_color_name}</b>"
+                        )
+                    else:
+                        color_msg = (
+                            f"🎨 Color selected: <b>{current_color_name}</b>"
+                        )
+
+                    # WICHTIG:
+                    # Den bereits aufgebauten großen Infoscreen niemals neu setzen
+                    # oder leeren. Der komplette System-Check-Block (Copyright,
+                    # LIVE/System Monitor, Autor/Version, Hauptmerkmale,
+                    # Systemdaten, Tools, Netzwerk, Repositories, Statistik
+                    # und "System-Check OK. Bereit.") bleibt erhalten.
+                    #
+                    # Vor dem Anhängen merken wir uns den aktuellen HTML-Inhalt.
+                    # append_info fügt anschließend ausschließlich am Ende ein.
+                    existing_html = info_widget.toHtml()
+
+                    self.append_info(
+                        info_widget,
+                        color_msg,
+                        "info"
+                    )
+
+                    # Sicherheitsprüfung: Falls eine unerwartete UI-Aktion
+                    # den Inhalt verändert hätte, den vollständigen bisherigen
+                    # Infoscreen wiederherstellen und die Farbm­eldung danach
+                    # erneut anhängen.
+                    if existing_html and not info_widget.toHtml().startswith(
+                        existing_html[:80]
+                    ):
+                        info_widget.setHtml(existing_html)
+                        self.append_info(
+                            info_widget,
+                            color_msg,
+                            "info"
+                        )
+
+            except Exception as e:
+                print(f"[change_colors] Farbmeldung im Infoscreen fehlgeschlagen: {e}")
 
         # ============================================================
         # 19. BUTTON-TEXTE NACH THEME/STYLE SICHER ANPASSEN
@@ -21137,6 +21716,9 @@ class PatchManagerGUI(QWidget):
             )
 
         # 4. Am Ende einfügen
+        # NIEMALS setHtml()/clear()/setPlainText() verwenden:
+        # append_info ist bewusst nicht-destruktiv, damit der komplette
+        # große Infoscreen mit allen bisherigen Meldungen sichtbar bleibt.
         cursor = widget.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         widget.setTextCursor(cursor)
@@ -23624,7 +24206,7 @@ class PatchManagerGUI(QWidget):
         patch_button_layout.setSpacing(3)
 
         self.header_btn_s3_ncam = QPushButton(self.TEXT.get("patch_folder_s3_ncam", "S3-NCam-Bonecrew-Pfad"))
-        self.header_btn_s3_ncam.setMinimumSize(350, 32)
+        self.header_btn_s3_ncam.setMinimumSize(170, 32)
         self.header_btn_s3_ncam.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         self.header_btn_s3_ncam.setToolTip(
             self.TEXT.get("patch_folder_s3_ncam_tooltip", "S3-NCam-Bonecrew-Pfad wählen")
@@ -23633,7 +24215,7 @@ class PatchManagerGUI(QWidget):
         path_button_layout.addWidget(self.header_btn_s3_ncam)
 
         self.header_btn_s4 = QPushButton(self.TEXT.get("patch_folder_s4", "S4-Pfad"))
-        self.header_btn_s4.setMinimumSize(350, 32)
+        self.header_btn_s4.setMinimumSize(170, 32)
         self.header_btn_s4.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         self.header_btn_s4.setToolTip(
             self.TEXT.get("patch_folder_s4_tooltip", "S4-Pfad wählen")
@@ -23643,7 +24225,7 @@ class PatchManagerGUI(QWidget):
 
         # Die beiden Patch-Kopieraktionen ebenfalls untereinander.
         self.header_btn_patch_ncam = QPushButton(self.TEXT.get("patch_copy_s3_ncam", "Patch → S3-NCam"))
-        self.header_btn_patch_ncam.setMinimumSize(205, 32)
+        self.header_btn_patch_ncam.setMinimumSize(170, 32)
         self.header_btn_patch_ncam.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         self.header_btn_patch_ncam.clicked.connect(
             lambda checked=False: self.copy_patch_to_target("ncam")
@@ -23651,7 +24233,7 @@ class PatchManagerGUI(QWidget):
         patch_button_layout.addWidget(self.header_btn_patch_ncam)
 
         self.header_btn_patch_s4 = QPushButton(self.TEXT.get("patch_copy_s4", "Patch → S4"))
-        self.header_btn_patch_s4.setMinimumSize(205, 32)
+        self.header_btn_patch_s4.setMinimumSize(170, 32)
         self.header_btn_patch_s4.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         self.header_btn_patch_s4.clicked.connect(
             lambda checked=False: self.copy_patch_to_target("s4")
@@ -28238,6 +28820,8 @@ class PatchManagerGUI(QWidget):
                 """
                 )
 
+    
+    
     def repaint_ui_colors(self):
         """
         Wendet das aktuell gewählte Farbschema auf die normalen GUI-Elemente an.
@@ -28249,52 +28833,95 @@ class PatchManagerGUI(QWidget):
         - NCam
 
         werden nicht überschrieben.
+
+        Zusätzlich wird die Farbauswahl-ComboBox (color_box)
+        vollständig an das aktuell gewählte Farbschema angepasst.
         """
-        from PyQt6.QtWidgets import QPushButton, QCheckBox
+
+        from PyQt6.QtWidgets import (
+            QPushButton,
+            QCheckBox,
+            QComboBox,
+            QListView,
+        )
+        from PyQt6.QtGui import QColor
 
         global current_diff_colors
 
         # ============================================================
         # 1. AKTUELLE THEME-FARBEN
         # ============================================================
-        text_color = current_diff_colors.get("fg", "#FFFFFF")
-        bg_color = current_diff_colors.get("bg", "#2F2F2F")
-        hover_color = current_diff_colors.get("hover", "#444444")
-        active_color = current_diff_colors.get("active", "#666666")
+
+        text_color = current_diff_colors.get(
+            "fg",
+            current_diff_colors.get(
+                "text",
+                "#FFFFFF"
+            )
+        )
+
+        bg_color = current_diff_colors.get(
+            "bg",
+            "#2F2F2F"
+        )
+
+        hover_color = current_diff_colors.get(
+            "hover",
+            "#444444"
+        )
+
+        active_color = current_diff_colors.get(
+            "active",
+            "#666666"
+        )
 
         # ============================================================
         # 2. INDIVIDUELLE BUTTONS SCHÜTZEN
         # ============================================================
+
         protected_buttons = {
             "btn_s3",
             "btn_s4",
             "btn_ncam",
         }
 
-        # Grid-Buttons ebenfalls schützen
+        # ============================================================
+        # 3. GRID-BUTTONS SCHÜTZEN
+        # ============================================================
+
         grid_buttons = set()
 
-        if hasattr(self, "buttons") and isinstance(self.buttons, dict):
+        if hasattr(self, "buttons") and isinstance(
+            self.buttons,
+            dict
+        ):
             try:
                 grid_buttons = {
                     btn
                     for btn in self.buttons.values()
                     if btn is not None
                 }
+
             except Exception:
                 grid_buttons = set()
 
         # ============================================================
-        # 3. NORMALE BUTTONS
+        # 4. NORMALE BUTTONS
         # ============================================================
+
         for btn in self.findChildren(QPushButton):
 
             try:
-                # S3 / S4 / NCam nicht anfassen
+
+                # ----------------------------------------------------
+                # S3 / S4 / NCam NICHT verändern
+                # ----------------------------------------------------
                 if btn.objectName() in protected_buttons:
                     continue
 
-                # Grid-Buttons nicht anfassen
+                # ----------------------------------------------------
+                # Grid-Buttons NICHT verändern
+                # ----------------------------------------------------
                 if btn in grid_buttons:
                     continue
 
@@ -28336,12 +28963,19 @@ class PatchManagerGUI(QWidget):
                 continue
 
         # ============================================================
-        # 4. TELEMETRIE CHECKBOX
+        # 5. TELEMETRIE CHECKBOX
         # ============================================================
-        cb = getattr(self, "telemetry_cb", None)
+
+        cb = getattr(
+            self,
+            "telemetry_cb",
+            None
+        )
 
         if cb:
+
             try:
+
                 cb.setStyleSheet(
                     f"""
                     QCheckBox {{
@@ -28384,20 +29018,194 @@ class PatchManagerGUI(QWidget):
                 pass
 
         # ============================================================
-        # 5. PROGRESS BAR
+        # 6. FARB-AUSWAHLBOX / COMBOBOX
         # ============================================================
-        pb = getattr(self, "progress_bar", None)
+
+        color_box = getattr(
+            self,
+            "color_box",
+            None
+        )
+
+        if color_box:
+
+            try:
+
+                # ----------------------------------------------------
+                # Haupt-ComboBox
+                # ----------------------------------------------------
+
+                color_box.setStyleSheet(
+                    f"""
+                    QComboBox {{
+                        background-color: {bg_color};
+                        color: {text_color};
+                        border: 1px solid {text_color};
+                        border-radius: 8px;
+                        padding: 5px 10px;
+                        min-height: 35px;
+                        font-weight: 700;
+                    }}
+
+                    QComboBox:hover {{
+                        background-color: {hover_color};
+                        color: {text_color};
+                        border: 1px solid {text_color};
+                    }}
+
+                    QComboBox:focus {{
+                        background-color: {bg_color};
+                        color: {text_color};
+                        border: 1px solid {text_color};
+                    }}
+
+                    QComboBox:on {{
+                        background-color: {bg_color};
+                        color: {text_color};
+                    }}
+
+                    QComboBox:disabled {{
+                        background-color: {active_color};
+                        color: #777777;
+                        border: 1px solid #555555;
+                    }}
+
+                    QComboBox::drop-down {{
+                        background-color: {bg_color};
+                        border: none;
+                        width: 30px;
+                        subcontrol-origin: padding;
+                        subcontrol-position: top right;
+                    }}
+
+                    QComboBox::drop-down:hover {{
+                        background-color: {hover_color};
+                    }}
+
+                    QComboBox::down-arrow {{
+                        width: 10px;
+                        height: 10px;
+                    }}
+
+                    QComboBox QAbstractItemView {{
+                        background-color: {bg_color};
+                        color: {text_color};
+                        border: 1px solid {text_color};
+                        selection-background-color: {hover_color};
+                        selection-color: {text_color};
+                        outline: none;
+                        padding: 2px;
+                    }}
+
+                    QComboBox QAbstractItemView::item {{
+                        background-color: {bg_color};
+                        color: {text_color};
+                        padding: 7px 10px;
+                        min-height: 25px;
+                    }}
+
+                    QComboBox QAbstractItemView::item:hover {{
+                        background-color: {hover_color};
+                        color: {text_color};
+                    }}
+
+                    QComboBox QAbstractItemView::item:selected {{
+                        background-color: {hover_color};
+                        color: {text_color};
+                    }}
+
+                    QComboBox QAbstractItemView::item:selected:hover {{
+                        background-color: {active_color};
+                        color: {text_color};
+                    }}
+                    """
+                )
+
+                # ----------------------------------------------------
+                # Wichtig:
+                #
+                # Bei bestimmten Qt-Styles wird das Popup als separates
+                # View-Widget behandelt. Deshalb setzen wir zusätzlich
+                # den View direkt.
+                # ----------------------------------------------------
+
+                try:
+
+                    view = color_box.view()
+
+                    if view:
+
+                        view.setStyleSheet(
+                            f"""
+                            QListView {{
+                                background-color: {bg_color};
+                                color: {text_color};
+                                border: 1px solid {text_color};
+                                outline: none;
+                                padding: 2px;
+                            }}
+
+                            QListView::item {{
+                                background-color: {bg_color};
+                                color: {text_color};
+                                padding: 7px 10px;
+                                min-height: 25px;
+                            }}
+
+                            QListView::item:hover {{
+                                background-color: {hover_color};
+                                color: {text_color};
+                            }}
+
+                            QListView::item:selected {{
+                                background-color: {hover_color};
+                                color: {text_color};
+                            }}
+
+                            QListView::item:selected:hover {{
+                                background-color: {active_color};
+                                color: {text_color};
+                            }}
+                            """
+                        )
+
+                except (
+                    RuntimeError,
+                    AttributeError
+                ):
+                    pass
+
+            except RuntimeError:
+                pass
+
+        # ============================================================
+        # 7. PROGRESS BAR
+        # ============================================================
+
+        pb = getattr(
+            self,
+            "progress_bar",
+            None
+        )
 
         if pb:
+
             try:
+
                 if pb.value() == 0:
 
-                    if hasattr(self, "pbar_idle"):
+                    if hasattr(
+                        self,
+                        "pbar_idle"
+                    ):
                         self.pbar_idle()
 
                 else:
 
-                    if hasattr(self, "_idle_anim"):
+                    if hasattr(
+                        self,
+                        "_idle_anim"
+                    ):
                         self._idle_anim.stop()
 
                     pb.setStyleSheet(
@@ -28413,7 +29221,7 @@ class PatchManagerGUI(QWidget):
 
                         QProgressBar::chunk {{
                             background-color: {active_color};
-                           border-radius: 6px;
+                            border-radius: 6px;
                         }}
                         """
                     )
@@ -28422,8 +29230,9 @@ class PatchManagerGUI(QWidget):
                 pass
 
         # ============================================================
-        # 6. LABELS & HEADER
+        # 8. LABELS & HEADER
         # ============================================================
+
         labels = [
             "lang_label",
             "color_label",
@@ -28436,15 +29245,27 @@ class PatchManagerGUI(QWidget):
 
         for lbl_name in labels:
 
-            lbl = getattr(self, lbl_name, None)
+            lbl = getattr(
+                self,
+                lbl_name,
+                None
+            )
 
             if not lbl:
                 continue
 
             try:
-                is_header = "header" in lbl_name
 
-                label_bg = bg_color if is_header else "transparent"
+                is_header = (
+                    "header"
+                    in lbl_name
+                )
+
+                label_bg = (
+                    bg_color
+                    if is_header
+                    else "transparent"
+                )
 
                 lbl.setStyleSheet(
                     f"""
@@ -28462,26 +29283,64 @@ class PatchManagerGUI(QWidget):
                 pass
 
         # ============================================================
-        # 7. HAUPTFENSTER-HINTERGRUND
+        # 9. HAUPTFENSTER-HINTERGRUND
         # ============================================================
-        # PatchManagerGUI erbt von QWidget, nicht von QMainWindow.
-        # Daher gibt es hier bewusst KEIN centralWidget().
+
         try:
-            self.setAutoFillBackground(True)
+
+            self.setAutoFillBackground(
+                True
+            )
+
             palette = self.palette()
-            palette.setColor(self.backgroundRole(), QColor(bg_color))
-            self.setPalette(palette)
-        except (RuntimeError, AttributeError):
+
+            palette.setColor(
+                self.backgroundRole(),
+                QColor(bg_color)
+            )
+
+            self.setPalette(
+                palette
+            )
+
+        except (
+            RuntimeError,
+            AttributeError,
+            TypeError
+        ):
             pass
 
         # ============================================================
-        # 8. PROGRESSBAR IDLE NACH THEME-ÄNDERUNG
+        # 10. PROGRESSBAR IDLE NACH THEME-ÄNDERUNG
         # ============================================================
+
         try:
-            if pb and pb.value() == 0 and hasattr(self, "pbar_idle"):
+
+            if (
+                pb
+                and pb.value() == 0
+                and hasattr(
+                    self,
+                    "pbar_idle"
+                )
+            ):
                 self.pbar_idle()
+
         except RuntimeError:
             pass
+
+        # ============================================================
+        # 11. GUI NEU ZEICHNEN
+        # ============================================================
+
+        try:
+
+            self.update()
+            self.repaint()
+
+        except RuntimeError:
+            pass
+
 
     def close_with_confirm(self):
         """
