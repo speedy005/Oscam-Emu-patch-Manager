@@ -856,7 +856,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "7.4.4"
+APP_VERSION = "7.4.5"
 # ===================== PATCH DIRS =====================
 def get_best_patch_dir():
     """Bestimmt den besten Patch-Ordner (S3, lokal, Home)."""
@@ -947,7 +947,7 @@ ICON_DIR = os.path.join(
 
 TEMP_REPO = os.path.join(
     PLUGIN_DIR,
-    "temp_repo"
+    "streamboard-git"
 )
 
 PATCH_EMU_GIT_DIR = os.path.join(
@@ -7144,7 +7144,7 @@ class CinematicMatrixSplash(QWidget):
             r" █  |_|   |_||__| |__||_|  |__||__| |__||_______||_______||___|  |_|      █ ",
             r" █                                                                        █ ",
             r" █──────────────────[ SYSTEM: NEURAL_LINK OPERATIONAL ]───────────────────█ ",
-            r" █                   >> OSCAM EMU PATCH MANAGER v7.4.4  <<               █ ",
+            r" █                   >> OSCAM EMU PATCH MANAGER v7.4.5  <<               █ ",
             r" █             >> CODENAME: Speedy_Oscam-_Patch_Manager 2026 <<           █ ",
             r" ◥◣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◢◤ "
         ]
@@ -14703,7 +14703,7 @@ class PatchManagerGUI(QWidget):
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
         self.PLUGIN_DIR = self.base_dir  # Arbeitsordner
         self.WORK_DIR = self.base_dir
-        self.TEMP_REPO = os.path.join(self.base_dir, "temp_repo")  # Temp-Repo Ordner
+        self.TEMP_REPO = os.path.join(self.base_dir, "streamboard-git")  # Temp-Repo Ordner
         self.PATCH_EMU_GIT_DIR = os.path.join(
             self.base_dir, "oscam-emu-git"
         )  # Emu-Git Ordner
@@ -18293,7 +18293,7 @@ class PatchManagerGUI(QWidget):
                 json.dump(config, handle, indent=4, ensure_ascii=False)
             # Aktuelle Laufzeit-Workflows verwenden ebenfalls die Auswahl.
             globals()["STREAMREPO_URL"] = STREAM_REPO_CHOICES[selected]
-            self.oscam_source_button.setText("oscam-git-url")
+            self.oscam_source_button.setText("Oscam-git-url")
             message = f"OSCam-Quelle eingestellt: {selected}\n{STREAM_REPO_CHOICES[selected]}"
             if hasattr(self, "append_info"):
                 self.append_info(self.info_text, message, "success")
@@ -25049,7 +25049,7 @@ class PatchManagerGUI(QWidget):
         # ---------------------------------------------------------
         # HEADER-AKTIONEN
         # Log speichern | Stats
-        # oscam-git-url leicht nach links versetzt darunter
+        # Oscam-git-url leicht nach links versetzt darunter
         # ---------------------------------------------------------
 
         header_actions_container = QWidget()
@@ -25121,7 +25121,7 @@ class PatchManagerGUI(QWidget):
         self.telemetry_cb.toggled.connect(self.on_telemetry_changed)
 
         # --- OSCAM-GIT-URL ---
-        self.oscam_source_button = QPushButton("oscam-git-url")
+        self.oscam_source_button = QPushButton("Oscam-git-url")
         self.oscam_source_button.setFixedSize(170, 32)
         self.oscam_source_button.setFont(
             QFont("Segoe UI", 9, QFont.Weight.Bold)
@@ -25148,7 +25148,7 @@ class PatchManagerGUI(QWidget):
         )
 
         # --- UNTERE REIHE ---
-        # Eigener Container, damit nur oscam-git-url nach links
+        # Eigener Container, damit nur Oscam-git-url nach links
         # versetzt wird, ohne die obere Reihe zu verschieben.
         oscam_row_container = QWidget()
         oscam_row_layout = QHBoxLayout(oscam_row_container)
