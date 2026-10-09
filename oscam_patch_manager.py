@@ -856,7 +856,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "7.4.3"
+APP_VERSION = "7.4.4"
 # ===================== PATCH DIRS =====================
 def get_best_patch_dir():
     """Bestimmt den besten Patch-Ordner (S3, lokal, Home)."""
@@ -1006,9 +1006,30 @@ EMUREPO_URL = (
     "https://github.com/oscam-mirror/oscam-emu.git"
 )
 
-STREAMREPO_URL = (
-    "https://git.streamboard.tv/common/oscam.git"
-)
+STREAMBOARD_OSCAM_URL = "https://git.streamboard.tv/common/oscam.git"
+SPEEDY_OSCAM_URL = "https://github.com/speedy005/oscam-git"
+STREAMREPO_URL = STREAMBOARD_OSCAM_URL
+STREAM_REPO_CHOICES = {
+    "Streamboard Oscam": STREAMBOARD_OSCAM_URL,
+    "speedy Oscan": SPEEDY_OSCAM_URL,
+}
+
+def get_selected_stream_repo_url():
+    """Aktive OSCam-Quelle aus Einstellungen lesen (Streamboard als Standard)."""
+    try:
+        config_path = globals().get("CONFIG_FILE", "config.json")
+        if os.path.isfile(config_path):
+            with open(config_path, "r", encoding="utf-8") as handle:
+                config = json.load(handle)
+            selected = config.get("oscam_source", "Streamboard Oscam")
+            return STREAM_REPO_CHOICES.get(selected, STREAMBOARD_OSCAM_URL)
+    except Exception:
+        pass
+    return STREAMBOARD_OSCAM_URL
+
+def get_selected_stream_repo_name():
+    url = get_selected_stream_repo_url()
+    return next((name for name, repo_url in STREAM_REPO_CHOICES.items() if repo_url == url), "Streamboard Oscam")
 
 
 # ===================== LOKALE REPOSITORY-PFADE =====================
@@ -7123,7 +7144,7 @@ class CinematicMatrixSplash(QWidget):
             r" █  |_|   |_||__| |__||_|  |__||__| |__||_______||_______||___|  |_|      █ ",
             r" █                                                                        █ ",
             r" █──────────────────[ SYSTEM: NEURAL_LINK OPERATIONAL ]───────────────────█ ",
-            r" █                   >> OSCAM EMU PATCH MANAGER v7.4.3  <<               █ ",
+            r" █                   >> OSCAM EMU PATCH MANAGER v7.4.4  <<               █ ",
             r" █             >> CODENAME: Speedy_Oscam-_Patch_Manager 2026 <<           █ ",
             r" ◥◣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◢◤ "
         ]
@@ -9055,10 +9076,7 @@ def create_patch(
             timeout=60
         ).strip()
 
-        stream_url = globals().get(
-            "STREAMREPO_URL",
-            "https://git.streamboard.tv/common/oscam.git"
-        )
+        stream_url = get_selected_stream_repo_url()
 
         stream_url = str(
             stream_url
@@ -9689,10 +9707,7 @@ def create_patch(
         # Streamboard Repository URL
         # ========================================================
 
-        stream_url = globals().get(
-            "STREAMREPO_URL",
-            "https://git.streamboard.tv/common/oscam.git"
-        )
+        stream_url = get_selected_stream_repo_url()
 
         stream_url = str(
             stream_url
@@ -12683,10 +12698,7 @@ def patch_oscam_emu_git(
             "PATCH_EMU_GIT_DIR"
         )
 
-        stream_url = globals().get(
-            "STREAMREPO_URL",
-            "https://git.streamboard.tv/common/oscam.git"
-        )
+        stream_url = get_selected_stream_repo_url()
 
         patch_file = globals().get(
             "PATCH_FILE"
@@ -18221,6 +18233,79 @@ class PatchManagerGUI(QWidget):
         # Dies überschreibt die Button-Styles im gesamten Fenster
         self.setStyleSheet(self.styleSheet() + style)
 
+    def on_telemetry_changed(self, checked):
+        """Schaltet Stats um und speichert den Zustand dauerhaft."""
+        try:
+            checked = bool(checked)
+            save_setting("allow_telemetry", checked)
+            is_de = str(getattr(self, "LANG", "de")).lower().startswith("de")
+            status = ("aktiviert" if checked else "deaktiviert") if is_de else ("enabled" if checked else "disabled")
+            if hasattr(self, "info_text") and self.info_text is not None:
+                message = f"Stats: {status}"
+                if hasattr(self, "append_info"):
+                    self.append_info(self.info_text, message, "success")
+                else:
+                    self.info_text.append(message)
+            print(f"Stats {status}; allow_telemetry={checked}")
+            # Die Status-Infobox wird bei jeder Änderung angezeigt.
+            title = "Stats-Einstellung" if is_de else "Stats Settings"
+            detail = (
+                f"Anonyme Nutzungsstatistik ist jetzt {status}.\n\n"
+                "Die Einstellung wird gespeichert und beim nächsten Start beibehalten."
+                if is_de else
+                f"Anonymous usage statistics are now {status}.\n\n"
+                "This setting is saved and kept for the next launch."
+            )
+            QMessageBox.information(self, title, detail)
+        except Exception as exc:
+            print(f"Stats-Einstellung konnte nicht gespeichert werden: {exc}")
+            try:
+                QMessageBox.warning(self, "Stats", str(exc))
+            except Exception:
+                pass
+
+    def choose_oscam_source(self):
+        """Öffnet eine separate Auswahlbox für das OSCam-Quellrepository."""
+        from PyQt6.QtWidgets import QInputDialog
+        is_de = str(getattr(self, "LANG", "de")).lower().startswith("de")
+        names = list(STREAM_REPO_CHOICES.keys())
+        current = get_selected_stream_repo_name()
+        selected, accepted = QInputDialog.getItem(
+            self,
+            "OSCam-Quelle auswählen" if is_de else "Select OSCam source",
+            "Repository für Patch-Erstellung:" if is_de else "Repository for patch creation:",
+            names,
+            names.index(current) if current in names else 0,
+            False,
+        )
+        if not accepted or selected not in STREAM_REPO_CHOICES:
+            return
+        try:
+            config_path = globals().get("CONFIG_FILE", "config.json")
+            config = {}
+            if os.path.isfile(config_path):
+                with open(config_path, "r", encoding="utf-8") as handle:
+                    loaded = json.load(handle)
+                    if isinstance(loaded, dict):
+                        config = loaded
+            config["oscam_source"] = selected
+            with open(config_path, "w", encoding="utf-8") as handle:
+                json.dump(config, handle, indent=4, ensure_ascii=False)
+            # Aktuelle Laufzeit-Workflows verwenden ebenfalls die Auswahl.
+            globals()["STREAMREPO_URL"] = STREAM_REPO_CHOICES[selected]
+            self.oscam_source_button.setText("oscam-git-url")
+            message = f"OSCam-Quelle eingestellt: {selected}\n{STREAM_REPO_CHOICES[selected]}"
+            if hasattr(self, "append_info"):
+                self.append_info(self.info_text, message, "success")
+            elif hasattr(self, "info_text"):
+                self.info_text.append(message)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "OSCam-Quelle",
+                f"Einstellung konnte nicht gespeichert werden:\n{exc}",
+            )
+
     def export_log(self):
         """Speichert Log als Textdatei mit originalem Sound-Code, Regenbogen und Gold-Reset."""
         import shutil, subprocess, os
@@ -21242,7 +21327,7 @@ class PatchManagerGUI(QWidget):
 
         info_dialog = QDialog(self)
         info_dialog.setWindowTitle(t.get("info_title", "About OSCam Emu Toolkit"))
-        info_dialog.setFixedSize(450, 320)
+        info_dialog.resize(450, 410)
 
         # Farben aus dem aktuellen Theme laden
         global current_diff_colors
@@ -21303,6 +21388,17 @@ class PatchManagerGUI(QWidget):
         credits_layout.addRow(QLabel("Emu Patch:"), emu_val)
         credits_layout.addRow(QLabel("License:"), lic_val)
         layout.addWidget(credits_group)
+
+        source_group = QGroupBox("OSCam-Quellrepository" if lang.startswith("de") else "OSCam source repository")
+        source_layout = QVBoxLayout(source_group)
+        active_source = get_selected_stream_repo_name()
+        source_label = QLabel(f"{active_source}\n{get_selected_stream_repo_url()}")
+        source_label.setWordWrap(True)
+        source_label.setStyleSheet(f"color: {text_color};")
+        source_layout.addWidget(source_label)
+        layout.addWidget(source_group)
+        info_dialog.setMinimumHeight(390)
+        info_dialog.setMaximumHeight(450)
 
         # Copyright
         copy_label = QLabel(f"© 2026 speedy005 - All rights reserved.")
@@ -24895,17 +24991,21 @@ class PatchManagerGUI(QWidget):
         install_path_layout = QHBoxLayout(install_path_container)
         install_path_layout.setContentsMargins(0, 0, 0, 0)
         install_path_layout.setSpacing(8)
-        install_path_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        install_path_layout.setAlignment(
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
+        )
 
         path_button_column = QWidget()
         path_button_layout = QVBoxLayout(path_button_column)
         path_button_layout.setContentsMargins(0, 0, 0, 0)
         path_button_layout.setSpacing(3)
+        path_button_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
         patch_button_column = QWidget()
         patch_button_layout = QVBoxLayout(patch_button_column)
         patch_button_layout.setContentsMargins(0, 0, 0, 0)
         patch_button_layout.setSpacing(3)
+        patch_button_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
         self.header_btn_s3_ncam = QPushButton(self.TEXT.get("patch_folder_s3_ncam", "S3-NCam-Bonecrew-Pfad"))
         self.header_btn_s3_ncam.setMinimumSize(170, 32)
@@ -24945,6 +25045,129 @@ class PatchManagerGUI(QWidget):
         install_path_layout.addWidget(path_button_column)
         install_path_layout.addWidget(patch_button_column)
 
+        
+        # ---------------------------------------------------------
+        # HEADER-AKTIONEN
+        # Log speichern | Stats
+        # oscam-git-url leicht nach links versetzt darunter
+        # ---------------------------------------------------------
+
+        header_actions_container = QWidget()
+        header_actions_layout = QGridLayout(header_actions_container)
+        header_actions_layout.setContentsMargins(0, 0, 0, 0)
+        header_actions_layout.setHorizontalSpacing(6)
+        header_actions_layout.setVerticalSpacing(6)
+        header_actions_layout.setAlignment(
+            Qt.AlignmentFlag.AlignHCenter |
+            Qt.AlignmentFlag.AlignVCenter
+        )
+
+        # Einheitlicher Stil für ALLE Aktionsbuttons
+        action_button_style = """
+            QPushButton {
+                color: #EAFF00;
+                background-color: #3d3d3d;
+                border: 1px solid #555;
+                border-radius: 7px;
+                padding: 2px 8px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #4d4d4d;
+                border: 1px solid #EAFF00;
+                color: white;
+            }
+            QPushButton:pressed {
+                background-color: #222;
+                border: 1px solid white;
+            }
+        """
+
+        # --- LOG SPEICHERN ---
+        log_text = "Log speichern" if lang == "de" else "Save Log"
+
+        self.log_button = QPushButton(log_text)
+        self.log_button.setFixedSize(170, 32)
+        self.log_button.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self.log_button.setIcon(
+            self.style().standardIcon(
+                QApplication.style().StandardPixmap.SP_DriveHDIcon
+            )
+        )
+        self.log_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.log_button.setStyleSheet(action_button_style)
+
+        if hasattr(self, "export_log"):
+            self.log_button.clicked.connect(self.export_log)
+
+        # --- STATS ---
+        self.telemetry_cb = QPushButton("Stats")
+        self.telemetry_cb.setCheckable(True)
+        self.telemetry_cb.setFixedSize(170, 32)
+        self.telemetry_cb.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self.telemetry_cb.setChecked(
+            bool(get_setting("allow_telemetry", True))
+        )
+        self.telemetry_cb.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.telemetry_cb.setToolTip(
+            "Anonyme Nutzungsstatistik (Hit-Counter) erlauben/verbieten."
+            if lang == "de" else
+            "Allow/disallow anonymous usage statistics (Hit-Counter)."
+        )
+        self.telemetry_cb.setAccessibleName(
+            "Stats aktivieren oder deaktivieren"
+        )
+        self.telemetry_cb.setStyleSheet(action_button_style)
+        self.telemetry_cb.toggled.connect(self.on_telemetry_changed)
+
+        # --- OSCAM-GIT-URL ---
+        self.oscam_source_button = QPushButton("oscam-git-url")
+        self.oscam_source_button.setFixedSize(170, 32)
+        self.oscam_source_button.setFont(
+            QFont("Segoe UI", 9, QFont.Weight.Bold)
+        )
+        self.oscam_source_button.setCursor(
+            Qt.CursorShape.PointingHandCursor
+        )
+        self.oscam_source_button.setToolTip(
+            "Quelle für Create Patch und OSCam-Emu-Git Patch auswählen"
+            if lang == "de" else
+            "Choose source for Create Patch and OSCam-Emu-Git Patch"
+        )
+        self.oscam_source_button.setStyleSheet(action_button_style)
+        self.oscam_source_button.clicked.connect(self.choose_oscam_source)
+
+        # --- OBERE REIHE ---
+        header_actions_layout.addWidget(
+            self.log_button, 0, 0,
+            alignment=Qt.AlignmentFlag.AlignCenter
+        )
+        header_actions_layout.addWidget(
+            self.telemetry_cb, 0, 1,
+            alignment=Qt.AlignmentFlag.AlignCenter
+        )
+
+        # --- UNTERE REIHE ---
+        # Eigener Container, damit nur oscam-git-url nach links
+        # versetzt wird, ohne die obere Reihe zu verschieben.
+        oscam_row_container = QWidget()
+        oscam_row_layout = QHBoxLayout(oscam_row_container)
+        oscam_row_layout.setContentsMargins(0, 0, 170, 0)
+        oscam_row_layout.setSpacing(0)
+        oscam_row_layout.addWidget(
+            self.oscam_source_button,
+            alignment=Qt.AlignmentFlag.AlignCenter
+        )
+
+        header_actions_layout.addWidget(
+            oscam_row_container, 1, 0, 1, 2,
+            alignment=Qt.AlignmentFlag.AlignCenter
+        )
+
+        # Aktionsblock rechts neben den Patch-Kopierbuttons einsetzen.
+        install_path_layout.addWidget(header_actions_container)
+
+
         # Kompakte, zum bestehenden Header passende Optik.
         for _btn in (
             self.header_btn_s3_ncam,
@@ -24974,77 +25197,9 @@ class PatchManagerGUI(QWidget):
             """)
 
         # Genau zwischen dem mittleren Header-Bereich und dem Log-Button.
-        header_layout.addWidget(install_path_container, 0)
+        header_layout.addWidget(install_path_container, 1, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
 
-        # 1. Log-Button
-        log_text = "Log speichern" if lang == "de" else "Save Log"
-        self.log_button = QPushButton(f" {log_text}")
-        self.log_button.setMinimumHeight(40)
-        self.log_button.setMinimumWidth(150)
-        self.log_button.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-        icon_log = self.style().standardIcon(
-            QApplication.style().StandardPixmap.SP_DriveHDIcon
-        )
-        self.log_button.setIcon(icon_log)
-        if hasattr(self, "export_log"):
-            self.log_button.clicked.connect(self.export_log)
-        right_header_layout.addWidget(self.log_button)
-
-        # 2. Stats Checkbox (VOLLSTÄNDIG MIT FUNKTION)
-        self.telemetry_cb = QCheckBox("Stats")
-
-        # FUNKTION WIEDERHERSTELLEN:
-        self.telemetry_cb.setChecked(get_setting("allow_telemetry", True))
-        #self.telemetry_cb.stateChanged.connect(self.on_telemetry_changed)
-
-        # Tooltip & Cursor
-        is_de = getattr(self, "LANG", "de") == "de"
-        self.telemetry_cb.setToolTip(
-            "Anonyme Nutzungsstatistik (Hit-Counter) erlauben/verbieten."
-            if is_de
-            else "Allow/Disallow anonymous usage statistics (Hit-Counter)."
-        )
-        self.telemetry_cb.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.telemetry_cb.setMinimumHeight(40)
-        self.telemetry_cb.setMinimumWidth(90)
-        self.telemetry_cb.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-
-        # Akzentfarbe für Hover-Effekt (z.B. Rot oder Gelb)
-        accent = (
-            "#FF0000"  # Hier kannst du deine Wunschfarbe für den Hover-Effekt setzen
-        )
-
-        # STYLE (Wieder eingefügt)
-        self.telemetry_cb.setStyleSheet(
-            f"""
-            QCheckBox {{
-                color: white;
-                background-color: rgba(255, 255, 255, 0.1);
-                border: 1px solid rgba(255, 255, 255, 0.2);
-                border-radius: 4px;
-                padding-left: 8px;
-                padding-right: 5px;
-            }}
-            QCheckBox:hover {{
-                background-color: {accent};
-                border: 1px solid white;
-                color: white !important;
-            }}
-            QCheckBox::indicator {{
-                width: 14px;
-                height: 14px;
-                border: 1px solid white;
-                border-radius: 2px;
-                background: transparent;
-            }}
-            QCheckBox::indicator:checked {{
-                background-color: white;
-                border: 1px solid white;
-            }}
-        """
-        )
-
-        right_header_layout.addWidget(self.telemetry_cb)
+        # Die Aktionsbuttons liegen jetzt direkt rechts neben den Patch-Buttons.
 
         # Fonts definieren, BEVOR sie benutzt werden (löst NameError)
         bold_font_header = QFont("Segoe UI", 24, QFont.Weight.Bold)
@@ -25089,6 +25244,33 @@ class PatchManagerGUI(QWidget):
 
         main_layout.addWidget(header_widget)
         self.apply_global_button_style("#EAFF00")
+        # Der Stats-Button ist ein echter Toggle-Button; sein Status bleibt sichtbar.
+        
+        self.telemetry_cb.setStyleSheet("""
+            QPushButton {
+                color: #EAFF00;
+                background-color: #3d3d3d;
+                border: 1px solid #555555;
+                border-radius: 7px;
+                padding: 2px 8px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #4d4d4d;
+                border: 1px solid #EAFF00;
+                color: white;
+            }
+            QPushButton:checked {
+                color: #EAFF00;
+                background-color: #292929;
+                border: 2px solid #EAFF00;
+            }
+            QPushButton:pressed {
+                background-color: #222222;
+                border: 1px solid white;
+            }
+        """)
+
         # ---------------------------------------------------------
         # INFO + PROGRESS
         # ---------------------------------------------------------
@@ -26024,10 +26206,7 @@ class PatchManagerGUI(QWidget):
             globals().get("STREAMREPO", "")
         )
         stream_url = str(
-            globals().get(
-                "STREAMREPO_URL",
-                "https://git.streamboard.tv/common/oscam.git"
-            )
+            get_selected_stream_repo_url()
         ).strip()
 
         if not stream_dir:
