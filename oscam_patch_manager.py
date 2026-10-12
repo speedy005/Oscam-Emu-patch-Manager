@@ -856,7 +856,7 @@ now = QDateTime.currentDateTime()
 time_str = now.toString("HH:mm:ss")
 date_str = now.toString("dd.MM.yyyy")
 # ===================== APP CONFIG =====================
-APP_VERSION = "7.4.5"
+APP_VERSION = "7.4.6"
 # ===================== PATCH DIRS =====================
 def get_best_patch_dir():
     """Bestimmt den besten Patch-Ordner (S3, lokal, Home)."""
@@ -7144,7 +7144,7 @@ class CinematicMatrixSplash(QWidget):
             r" █  |_|   |_||__| |__||_|  |__||__| |__||_______||_______||___|  |_|      █ ",
             r" █                                                                        █ ",
             r" █──────────────────[ SYSTEM: NEURAL_LINK OPERATIONAL ]───────────────────█ ",
-            r" █                   >> OSCAM EMU PATCH MANAGER v7.4.5  <<               █ ",
+            r" █                   >> OSCAM EMU PATCH MANAGER v7.4.6  <<               █ ",
             r" █             >> CODENAME: Speedy_Oscam-_Patch_Manager 2026 <<           █ ",
             r" ◥◣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◢◤ "
         ]
@@ -22349,30 +22349,89 @@ class PatchManagerGUI(QWidget):
             try:
                 if len(new_content) < 1000:
                     raise ValueError("Download-Datei korrupt (zu klein).")
+
                 with open(current_file, "wb") as f:
                     f.write(new_content)
+
             except Exception as write_error:
                 if os.path.exists(backup_file):
                     shutil.copy2(backup_file, current_file)
                 raise write_error
 
+            # --- 3b. STARTDATEIEN AKTUALISIEREN ---
+            start_files = {
+                "start_windows.bat": (
+                    "https://raw.githubusercontent.com/"
+                    "speedy005/Oscam-Emu-patch-Manager/"
+                    "refs/heads/master/start_windows.bat"
+                ),
+                "start_linux.sh": (
+                    "https://raw.githubusercontent.com/"
+                    "speedy005/Oscam-Emu-patch-Manager/"
+                    "refs/heads/master/start_linux.sh"
+                ),
+            }
+
+            # Hauptordner des aktuellen Python-Tools
+            app_dir = os.path.dirname(os.path.abspath(current_file))
+
+            for filename, url in start_files.items():
+                temp_file = None
+
+                try:
+                    response = requests.get(url, timeout=20)
+                    response.raise_for_status()
+
+                    if not response.content.strip():
+                        raise ValueError("Die heruntergeladene Datei ist leer.")
+
+                    target_file = os.path.join(app_dir, filename)
+                    temp_file = target_file + ".tmp"
+
+                    with open(temp_file, "wb") as f:
+                        f.write(response.content)
+
+                    # Erst nach vollständigem Download ersetzen
+                    os.replace(temp_file, target_file)
+
+                except Exception as file_error:
+                    # Fehler bei Startdateien verhindern nicht das Hauptupdate
+                    if temp_file and os.path.exists(temp_file):
+                        try:
+                            os.remove(temp_file)
+                        except OSError:
+                            pass
+
+                    print(
+                        f"Warnung: {filename} konnte nicht aktualisiert werden: "
+                        f"{file_error}"
+                    )
+
             # --- 4. ERFOLG ---
             action_log("update_done", "success", version=latest_version)
+
             if "safe_play" in globals():
                 safe_play("complete.oga")
+
             set_pbar(100, "🏁 Fertig!" if is_de else "🏁 Done!")
 
             msg_box = QMessageBox(self)
             msg_box.setIcon(QMessageBox.Icon.Information)
-            msg_box.setWindowTitle(lang_pack.get("restart_required_title", "Restart"))
-            msg_box.setText(
-                f"{lang_pack.get('update_success', 'Update OK')}\n\n{lang_pack.get('restart_tool_question', 'Restart?')}"
+            msg_box.setWindowTitle(
+                lang_pack.get("restart_required_title", "Restart")
             )
+            msg_box.setText(
+                f"{lang_pack.get('update_success', 'Update OK')}\n\n"
+                f"{lang_pack.get('restart_tool_question', 'Restart?')}"
+            )
+
             yes_btn = msg_box.addButton(
-                lang_pack.get("yes", "Ja"), QMessageBox.ButtonRole.YesRole
+                lang_pack.get("yes", "Ja"),
+                QMessageBox.ButtonRole.YesRole,
             )
             msg_box.addButton(
-                lang_pack.get("no", "Nein"), QMessageBox.ButtonRole.NoRole
+                lang_pack.get("no", "Nein"),
+                QMessageBox.ButtonRole.NoRole,
             )
             msg_box.exec()
 
@@ -22382,11 +22441,13 @@ class PatchManagerGUI(QWidget):
         except Exception as e:
             if "safe_play" in globals():
                 safe_play("dialog-error.oga")
+
             if pbar:
                 pbar.setStyleSheet(
                     "QProgressBar { color: black; font-weight: 900; background: #800; }"
                 )
                 pbar.setFormat("❌ Fehler!" if is_de else "❌ Error!")
+
             QMessageBox.critical(self, "Update Error", f"Fehler: {str(e)}")
 
 
